@@ -8,6 +8,8 @@ __pycache__/
 .coverage
 htmlcov/
 outputs/
+.precond_abort_state.json
+.precond_abort_state.json.tmp
 
 # Local measurement recordings can be very large and may contain project data.
 *.mf4

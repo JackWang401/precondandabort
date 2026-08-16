@@ -6,7 +6,7 @@
    - two calibration JSON files;
    - one or more MDF/MF4 measurement files;
    - a configuration workbook in Apple Numbers (`.numbers`) or Excel (`.xlsx` or `.xlsm`) format; and
-   - the output Excel report path.
+   - the automatically generated output Excel report path.
 2. The HMI shall not assume that either calibration JSON file is stored in a fixed location. When the HMI starts, it shall open file-navigation dialogs that allow the user to locate both JSON files. Separate `Browse` controls shall remain available for the two files.
 3. Before both calibration JSON files are loaded, the HMI shall display placeholder rows for the four active motion calibratables: steering-wheel angle, steering-wheel-angle speed, yaw rate, and lateral acceleration.
 4. After both calibration JSON files are loaded, the software shall discover every numeric JSON entry that can be used as calibration data. Each entry shall retain the name of its originating JSON file.
@@ -18,6 +18,7 @@
 10. The HMI shall visualize the accepted X/Y pair using the useful features of the existing `cal_thd_intp` tool. At a minimum, it shall display the curve, its breakpoints, units, and the interpolated threshold at a user-specified vehicle speed.
 11. The HMI shall display validation messages, analysis progress, a visible notice that throttle checks are disabled, and a preview of the detected abort events.
 12. The MDF/MF4 `Browse` control shall allow the user to select multiple measurement files. The software shall analyze every selected file and combine the detected events into one output report while retaining the originating filename for each event.
+13. The HMI shall remember both calibration JSON paths, all selected MDF/MF4 paths, and the configuration-workbook path between launches. Restored paths shall take precedence over repository sample-file defaults. The output-report path shall be recalculated from the restored measurement location.
 
 ## 2. Signal mapping
 
@@ -86,6 +87,7 @@
 10. The report shall also record the signal mapping, the originating `calParam` row, and the exact X and Y JSON sources used for every active motion threshold.
 11. The workbook shall be formatted for readability. The primary worksheet shall freeze its two header rows and first three columns; applicable audit tables shall include filters and frozen headers.
 12. The run-information worksheet shall list every MDF/MF4 file included in a batch report.
+13. The output workbook shall be saved in the same folder as the input MDF/MF4 file. When multiple files are selected, they shall be in one shared folder, and the combined report shall be saved in that folder.
 
 ## 6. Validation and error handling
 

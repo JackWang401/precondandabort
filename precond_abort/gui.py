@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import queue
 import threading
 from pathlib import Path
@@ -24,6 +25,8 @@ LINE = "#D7E0E6"
 WARNING = "#9A5B00"
 CONSTANT_X_OPTION = "(constant — no X axis)"
 LOAD_CONFIG_PLACEHOLDER = "Load calParam first"
+PATH_STATE_VERSION = 1
+PATH_STATE_PATH = Path(__file__).resolve().parent.parent / ".precond_abort_state.json"
 
 THRESHOLD_BINDING_SPECS = (
     ("steering_wheel_angle", "Steering wheel angle", "SteeringWheelAngle_Th"),
@@ -38,6 +41,70 @@ DEFAULT_PARAMETER_NAME_BY_ROLE = {role: parameter for role, _, parameter in THRE
 
 def initial_binding_row(label: str) -> tuple[str, str, str, str]:
     return (label, LOAD_CONFIG_PLACEHOLDER, LOAD_CONFIG_PLACEHOLDER, "Waiting")
+
+
+def analysis_output_path(measurement_paths: tuple[str, ...]) -> Path:
+    if not measurement_paths:
+        raise InputValidationError("Select at least one MDF/MF4 measurement file")
+    measurements = tuple(
+        Path(path).expanduser().resolve() for path in measurement_paths
+    )
+    parent_directories = {path.parent for path in measurements}
+    if len(parent_directories) != 1:
+        raise InputValidationError(
+            "All selected MDF/MF4 files must be in the same folder so the combined "
+            "report can be saved beside them"
+        )
+    if len(measurements) == 1:
+        filename = f"{measurements[0].stem}_abort_analysis.xlsx"
+    else:
+        filename = f"combined_{len(measurements)}_files_abort_analysis.xlsx"
+    return measurements[0].parent / filename
+
+
+def read_path_state(path: str | Path | None = None) -> dict[str, object]:
+    state_path = Path(path) if path is not None else PATH_STATE_PATH
+    if not state_path.exists():
+        return {}
+    try:
+        document = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InputValidationError(f"Cannot read saved HMI paths from {state_path}: {exc}") from exc
+    if not isinstance(document, dict):
+        raise InputValidationError(f"Saved HMI paths in {state_path} must be a JSON object")
+
+    def text_value(key: str) -> str:
+        value = document.get(key, "")
+        return value if isinstance(value, str) else ""
+
+    measurements = document.get("measurement_files", [])
+    if not isinstance(measurements, list):
+        measurements = []
+    return {
+        "version": document.get("version", PATH_STATE_VERSION),
+        "calibration_json_1": text_value("calibration_json_1"),
+        "calibration_json_2": text_value("calibration_json_2"),
+        "measurement_files": [value for value in measurements if isinstance(value, str)],
+        "mapping_workbook": text_value("mapping_workbook"),
+        "output_report": text_value("output_report"),
+    }
+
+
+def write_path_state(state: dict[str, object], path: str | Path | None = None) -> Path:
+    state_path = Path(path) if path is not None else PATH_STATE_PATH
+    temporary = state_path.with_name(f"{state_path.name}.tmp")
+    try:
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(
+            json.dumps(state, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(state_path)
+    except OSError as exc:
+        if temporary.exists():
+            temporary.unlink()
+        raise InputValidationError(f"Cannot save HMI paths to {state_path}: {exc}") from exc
+    return state_path
 
 
 class AnalyzerApp:
@@ -63,7 +130,6 @@ class AnalyzerApp:
         self._calibrations: CalibrationRepository | None = None
         self._loaded_calibration_paths: tuple[str, ...] | None = None
         self._measurement_paths: tuple[str, ...] = ()
-        self._output_was_auto = False
         self._entry_by_display = {}
         self._display_by_source: dict[str, str] = {}
         self._calibration_specs: dict[str, CalibrationBindingSpec] = {}
@@ -78,7 +144,10 @@ class AnalyzerApp:
 
         self._configure_style()
         self._build_ui()
+        self._restore_path_state()
         self._populate_sample_paths()
+        self._load_initial_inputs()
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
         self.root.after(100, self._poll_worker)
         self.root.after(250, self._prompt_for_calibration)
 
@@ -127,7 +196,15 @@ class AnalyzerApp:
         self._file_row(files, 2, "Calibration JSON 2", self.calibration_path_2, "json_2")
         self._file_row(files, 3, "Measurement MDF/MF4 files", self.measurement_path, "mdf", readonly=True)
         self._file_row(files, 4, "Configuration workbook", self.mapping_path, "mapping")
-        self._file_row(files, 5, "Output Excel report", self.output_path, "output")
+        self._file_row(
+            files,
+            5,
+            "Output Excel report",
+            self.output_path,
+            "output",
+            readonly=True,
+            browse=False,
+        )
         ttk.Label(files, textvariable=self.mapping_status, style="Warning.TLabel").grid(
             row=6, column=1, columnspan=2, sticky="w", pady=(5, 0)
         )
@@ -256,13 +333,61 @@ class AnalyzerApp:
         variable: tk.StringVar,
         kind: str,
         readonly: bool = False,
+        browse: bool = True,
     ) -> None:
         ttk.Label(parent, text=label, style="Body.TLabel", width=24).grid(row=row, column=0, sticky="w", pady=3)
         entry = ttk.Entry(parent, textvariable=variable, state="readonly" if readonly else "normal")
         entry.grid(row=row, column=1, sticky="ew", padx=(6, 8), pady=3)
-        ttk.Button(parent, text="Browse", style="Secondary.TButton", command=lambda: self._browse(kind)).grid(
-            row=row, column=2, pady=3
-        )
+        if not readonly:
+            entry.bind("<FocusOut>", lambda _event: self._save_path_state())
+            entry.bind("<Return>", lambda _event: self._save_path_state())
+        if browse:
+            ttk.Button(parent, text="Browse", style="Secondary.TButton", command=lambda: self._browse(kind)).grid(
+                row=row, column=2, pady=3
+            )
+        else:
+            ttk.Label(parent, text="Automatic", style="Muted.TLabel").grid(
+                row=row, column=2, padx=(4, 7), pady=3
+            )
+
+    def _restore_path_state(self) -> None:
+        try:
+            state = read_path_state()
+        except InputValidationError as exc:
+            self.mapping_status.set(str(exc))
+            return
+        if not state:
+            return
+        self.calibration_path_1.set(str(state["calibration_json_1"]))
+        self.calibration_path_2.set(str(state["calibration_json_2"]))
+        measurement_files = tuple(str(value) for value in state["measurement_files"])
+        if measurement_files:
+            self._set_measurement_paths(measurement_files)
+        self.mapping_path.set(str(state["mapping_workbook"]))
+        saved_output = str(state["output_report"])
+        if saved_output and not measurement_files:
+            self.output_path.set(saved_output)
+        self.status.set("Restored the previous file selections")
+
+    def _save_path_state(self) -> bool:
+        state = {
+            "version": PATH_STATE_VERSION,
+            "calibration_json_1": self.calibration_path_1.get().strip(),
+            "calibration_json_2": self.calibration_path_2.get().strip(),
+            "measurement_files": list(self._measurement_paths),
+            "mapping_workbook": self.mapping_path.get().strip(),
+            "output_report": self.output_path.get().strip(),
+        }
+        try:
+            write_path_state(state)
+        except InputValidationError as exc:
+            self.mapping_status.set(str(exc))
+            return False
+        return True
+
+    def _close(self) -> None:
+        self._save_path_state()
+        self.root.destroy()
 
     def _populate_sample_paths(self) -> None:
         cwd = Path.cwd()
@@ -270,11 +395,16 @@ class AnalyzerApp:
         numbers_workbook = cwd / "PrecondAndAbort.numbers"
         excel_workbook = cwd / "PrecondAndAbort.xlsx"
         workbook = numbers_workbook if numbers_workbook.exists() else excel_workbook
-        if mdf_files:
+        if mdf_files and not self._measurement_paths:
             self._set_measurement_paths(tuple(str(path) for path in mdf_files))
-        if workbook.exists():
+        if workbook.exists() and not self.mapping_path.get().strip():
             self.mapping_path.set(str(workbook))
+
+    def _load_initial_inputs(self) -> None:
+        if self.mapping_path.get().strip():
             self._load_mapping_status()
+        if self._selected_calibration_paths():
+            self._load_calibrations(show_error=False)
 
     def _prompt_for_calibration(self) -> None:
         if self.calibration_path_1.get().strip() and self.calibration_path_2.get().strip():
@@ -302,19 +432,13 @@ class AnalyzerApp:
         )
         self.measurement_path.set("; ".join(self._measurement_paths))
         if not self._measurement_paths:
+            self.output_path.set("")
             return
-        if not self.output_path.get().strip() or self._output_was_auto:
-            first = Path(self._measurement_paths[0])
-            output_directory = first.parent
-            local_outputs = Path.cwd() / "outputs"
-            if first.parent == Path.cwd() and local_outputs.exists():
-                output_directory = local_outputs
-            if len(self._measurement_paths) == 1:
-                filename = f"{first.stem}_abort_analysis.xlsx"
-            else:
-                filename = f"combined_{len(self._measurement_paths)}_files_abort_analysis.xlsx"
-            self.output_path.set(str(output_directory / filename))
-            self._output_was_auto = True
+        try:
+            self.output_path.set(str(analysis_output_path(self._measurement_paths)))
+        except InputValidationError as exc:
+            self.output_path.set("")
+            self.mapping_status.set(str(exc))
 
     def _browse(self, kind: str) -> None:
         if kind in {"json_1", "json_2"}:
@@ -326,6 +450,7 @@ class AnalyzerApp:
             if selected:
                 target = self.calibration_path_1 if kind == "json_1" else self.calibration_path_2
                 target.set(selected)
+                self._save_path_state()
                 if self._selected_calibration_paths():
                     self._load_calibrations()
                 else:
@@ -337,6 +462,7 @@ class AnalyzerApp:
             )
             if selected:
                 self._set_measurement_paths(tuple(selected))
+                self._save_path_state()
         elif kind == "mapping":
             selected = filedialog.askopenfilename(
                 title="Select configuration workbook",
@@ -348,18 +474,10 @@ class AnalyzerApp:
             )
             if selected:
                 self.mapping_path.set(selected)
+                self._save_path_state()
                 self._load_mapping_status()
-        else:
-            selected = filedialog.asksaveasfilename(
-                title="Save analysis report",
-                defaultextension=".xlsx",
-                filetypes=[("Excel workbook", "*.xlsx")],
-            )
-            if selected:
-                self.output_path.set(selected)
-                self._output_was_auto = False
 
-    def _load_calibrations(self) -> None:
+    def _load_calibrations(self, show_error: bool = True) -> None:
         try:
             calibration_paths = self._selected_calibration_paths()
             if len(calibration_paths) != 2:
@@ -377,7 +495,7 @@ class AnalyzerApp:
             self.x_entry_box["values"] = (CONSTANT_X_OPTION, *displays)
             self.y_entry_box["values"] = displays
             self._calibration_bindings = {}
-            all_bound = self._bind_from_cal_param(show_error=True)
+            all_bound = self._bind_from_cal_param(show_error=show_error)
             first_role, first_label, _ = THRESHOLD_BINDING_SPECS[0]
             self.threshold_role.set(first_label)
             self.binding_tree.selection_set(first_role)
@@ -403,7 +521,10 @@ class AnalyzerApp:
             self.x_entry_selection.set("")
             self.y_entry_selection.set("")
             self._refresh_binding_table()
-            messagebox.showerror("Calibration JSON files", str(exc), parent=self.root)
+            if show_error:
+                messagebox.showerror("Calibration JSON files", str(exc), parent=self.root)
+            else:
+                self.mapping_status.set(f"Saved calibration paths could not be loaded: {exc}")
 
     def _on_binding_row_selected(self, _event=None) -> None:
         selected = self.binding_tree.selection()
@@ -643,7 +764,6 @@ class AnalyzerApp:
             "Calibration JSON 1": self.calibration_path_1.get(),
             "Calibration JSON 2": self.calibration_path_2.get(),
             "Configuration workbook": self.mapping_path.get(),
-            "Output report": self.output_path.get(),
         }
         missing = [label for label, value in paths.items() if not value.strip()]
         if not self._measurement_paths:
@@ -651,6 +771,13 @@ class AnalyzerApp:
         if missing:
             messagebox.showerror("Missing input", "Select the following files:\n- " + "\n- ".join(missing), parent=self.root)
             return
+        try:
+            output_path = analysis_output_path(self._measurement_paths)
+        except InputValidationError as exc:
+            messagebox.showerror("Measurement locations", str(exc), parent=self.root)
+            return
+        self.output_path.set(str(output_path))
+        self._save_path_state()
         selected_calibration_paths = self._selected_calibration_paths()
         if self._loaded_calibration_paths != selected_calibration_paths:
             self._load_calibrations()
@@ -672,7 +799,7 @@ class AnalyzerApp:
         self._analysis_calibration_paths = selected_calibration_paths
         self._analysis_measurement_paths = self._measurement_paths
         self._analysis_mapping_path = paths["Configuration workbook"].strip()
-        self._analysis_output_path = paths["Output report"].strip()
+        self._analysis_output_path = str(output_path)
         self.run_button.configure(state="disabled")
         self.progress.start(12)
         count = len(self._analysis_measurement_paths)
