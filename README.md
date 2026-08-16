@@ -25,16 +25,18 @@ The deployment scripts use 64-bit Python 3.12 from python.org. The standard inst
 
 The launcher works from paths containing spaces. The application stores remembered paths in `%LOCALAPPDATA%\PrecondAbortAnalyzer\state.json`, so its installation folder may be read-only. On Windows, the bundled `PrecondAndAbort.xlsx` workbook is preferred automatically; `.numbers` files remain supported without requiring the Apple Numbers application.
 
-## Standalone Windows deployment
+## Standalone Windows executable
 
 To deploy the application to Windows 11 computers that do not have Python installed, build it on a Windows 11 machine:
 
 1. Run `setup_windows.bat`.
 2. Run `build_windows.bat`.
-3. Distribute the entire `dist\PrecondAbortAnalyzer` folder.
-4. Start the deployed application with `PrecondAbortAnalyzer.exe`.
+3. Distribute `dist\PrecondAbortAnalyzer.exe`.
+4. Start the deployed application by double-clicking the executable.
 
-The build is folder-based, so do not copy the `.exe` by itself. The generated executable is unsigned; sign it with your organization's code-signing certificate before broad managed deployment if required by your Windows security policy.
+The configuration workbook and Python runtime are embedded in this single executable. The generated executable is unsigned; sign it with your organization's code-signing certificate before broad managed deployment if required by your Windows security policy.
+
+The repository's `Build Windows executable` GitHub Actions workflow also produces a downloadable `PrecondAbortAnalyzer-Windows-x64` artifact whenever packaging-related changes reach `main`, or when the workflow is started manually.
 
 ## Manual development installation
 

@@ -1,0 +1,82 @@
+name: Build Windows executable
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-windows-exe.yml"
+      - "precond_abort/**"
+      - "tests/**"
+      - "run_app.py"
+      - "PrecondAndAbort.xlsx"
+      - "requirements.txt"
+      - "requirements-build.txt"
+      - "build_windows.bat"
+      - "pyproject.toml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          architecture: "x64"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-build.txt
+
+      - name: Run automated tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Build the self-contained executable
+        shell: pwsh
+        run: |
+          python -m PyInstaller `
+            --noconfirm `
+            --clean `
+            --windowed `
+            --onefile `
+            --name "PrecondAbortAnalyzer" `
+            --collect-all "asammdf" `
+            --collect-all "numbers_parser" `
+            --add-data "PrecondAndAbort.xlsx;." `
+            "run_app.py"
+
+      - name: Verify and checksum the executable
+        shell: pwsh
+        run: |
+          $executable = Get-Item "dist\PrecondAbortAnalyzer.exe"
+          if ($executable.Length -lt 1MB) {
+            throw "The generated executable is unexpectedly small."
+          }
+          $hash = (Get-FileHash $executable.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  PrecondAbortAnalyzer.exe" | Set-Content "dist\SHA256SUMS.txt" -Encoding ascii
+          Write-Host "Executable size: $($executable.Length) bytes"
+          Write-Host "SHA-256: $hash"
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: PrecondAbortAnalyzer-Windows-x64
+          path: |
+            dist/PrecondAbortAnalyzer.exe
+            dist/SHA256SUMS.txt
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error

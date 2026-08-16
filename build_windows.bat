@@ -16,7 +16,7 @@ python -m PyInstaller ^
     --noconfirm ^
     --clean ^
     --windowed ^
-    --onedir ^
+    --onefile ^
     --name "PrecondAbortAnalyzer" ^
     --collect-all "asammdf" ^
     --collect-all "numbers_parser" ^
@@ -24,11 +24,9 @@ python -m PyInstaller ^
     "run_app.py"
 if errorlevel 1 goto :failed
 
-copy /Y "README.md" "dist\PrecondAbortAnalyzer\README.md" >nul
 echo.
 echo Build completed successfully.
-echo Deploy the entire dist\PrecondAbortAnalyzer folder to Windows 11.
-echo Start it with PrecondAbortAnalyzer.exe.
+echo Deploy dist\PrecondAbortAnalyzer.exe to Windows 11.
 pause
 exit /b 0
 

@@ -107,5 +107,6 @@
 3. The Windows HMI shall prefer `PrecondAndAbort.xlsx` as its default configuration workbook while continuing to accept `.xlsx`, `.xlsm`, and `.numbers` files selected by the user.
 4. The Windows file-navigation dialogs shall provide compatible filters for JSON, MDF/MF4, and configuration-workbook files.
 5. The Windows HMI shall request DPI-aware rendering so that controls remain legible on scaled displays.
-6. The project shall provide scripts for installing dependencies, launching from a local virtual environment, and building a standalone Windows application folder.
+6. The project shall provide scripts for installing dependencies, launching from a local virtual environment, and building a single-file Windows executable.
 7. A standalone build shall store mutable state in the user's profile and shall not require write access to its installation directory. Analysis reports shall continue to be written beside the selected MDF/MF4 input files.
+8. The repository shall provide a Windows CI workflow that runs the automated tests, builds the executable, calculates its SHA-256 checksum, and publishes both files as a downloadable build artifact.
