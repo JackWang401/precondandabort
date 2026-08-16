@@ -1,0 +1,57 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from openpyxl import load_workbook
+
+from precond_abort.analyzer import AbortAnalyzer
+from precond_abort.calibration import CalibrationRepository
+from precond_abort.mapping import default_mapping
+from precond_abort.report import OUTPUT_HEADER_ROW_1, OUTPUT_HEADER_ROW_2, write_report
+import tests.test_analyzer as analyzer_fixtures
+
+
+class ReportTests(unittest.TestCase):
+    def test_report_contains_requested_and_audit_sheets(self):
+        fixture = analyzer_fixtures.AbortAnalyzerTests()
+        fixture.setUp()
+        result = AbortAnalyzer().analyze(
+            fixture._source(), fixture.mapping, fixture.calibrations, "input.mf4"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_report(result, Path(directory) / "report.xlsx")
+            workbook = load_workbook(path, data_only=False)
+            self.assertEqual(
+                workbook.sheetnames,
+                ["Abort Analysis", "Event Details", "Signal Mapping", "Parameters", "Run Information"],
+            )
+            analysis = workbook["Abort Analysis"]
+            header_row_1 = [cell.value for cell in analysis[1]]
+            header_row_2 = [cell.value for cell in analysis[2]]
+            self.assertEqual(header_row_1, list(OUTPUT_HEADER_ROW_1))
+            self.assertEqual(header_row_2, list(OUTPUT_HEADER_ROW_2))
+            self.assertEqual(
+                {str(cell_range) for cell_range in analysis.merged_cells.ranges},
+                {"A1:A2", "B1:B2", "C1:C2", "D1:F1", "G1:I1", "J1:L1", "M1:O1", "P1:R1", "S1:U1", "V1:V2"},
+            )
+            self.assertEqual(analysis.max_row, 5)
+            self.assertEqual(analysis["A3"].value, "input.mf4")
+            self.assertEqual(analysis["B3"].value, 1)
+            self.assertEqual(analysis["C3"].value, 10)
+            self.assertEqual(analysis["D3"].value, 11)
+            self.assertEqual(analysis["E3"].value, 10)
+            self.assertEqual(analysis["F3"].value, "Yes")
+            self.assertEqual(analysis["V5"].value, "Yes")
+            for checked_cell in (analysis["F3"], analysis["V5"]):
+                self.assertEqual(checked_cell.fill.fill_type, "solid")
+                self.assertEqual(checked_cell.fill.fgColor.rgb, "00C6EFCE")
+                self.assertTrue(checked_cell.font.bold)
+                self.assertEqual(checked_cell.font.color.rgb, "00006100")
+            parameter_headers = [cell.value for cell in workbook["Parameters"][1]]
+            self.assertEqual(parameter_headers[2:4], ["X Source", "Y Source"])
+            self.assertEqual(workbook["Run Information"]["B5"].value, 3)
+            workbook.close()
+
+
+if __name__ == "__main__":
+    unittest.main()

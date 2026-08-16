@@ -1,0 +1,14 @@
+.DS_Store
+.venv/
+.codex-work/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+outputs/
+
+# Local measurement recordings can be very large and may contain project data.
+*.mf4
+*.mdf

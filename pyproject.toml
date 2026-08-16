@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "precond-abort-analyzer"
+version = "1.0.0"
+description = "Local HMI and analysis engine for AEB precondition and abort events"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "asammdf>=8.0,<9",
+    "numpy>=2.0,<3",
+    "openpyxl>=3.1,<4",
+]
+
+[project.scripts]
+precond-abort = "precond_abort.cli:main"
+precond-abort-gui = "precond_abort.gui:launch"
+
+[tool.setuptools.packages.find]
+include = ["precond_abort*"]
