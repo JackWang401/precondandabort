@@ -26,13 +26,15 @@ class GuiConfigurationTests(unittest.TestCase):
 
     def test_vcs_cal_is_required_and_safety_cal_is_optional(self):
         self.assertEqual(selected_calibration_paths("", "/cal/safety.json"), ())
+        vcs_path = str(Path("/cal/vcs.json").resolve())
+        safety_path = str(Path("/cal/safety.json").resolve())
         self.assertEqual(
             selected_calibration_paths("/cal/vcs.json"),
-            ("/cal/vcs.json",),
+            (vcs_path,),
         )
         self.assertEqual(
             selected_calibration_paths("/cal/vcs.json", "/cal/safety.json"),
-            ("/cal/vcs.json", "/cal/safety.json"),
+            (vcs_path, safety_path),
         )
 
     def test_windows_state_is_saved_under_local_app_data(self):
@@ -131,23 +133,29 @@ class GuiConfigurationTests(unittest.TestCase):
                 read_path_state(path)
 
     def test_single_measurement_report_is_saved_beside_input(self):
-        output = analysis_output_path(("/measurements/run_01.mf4",))
-        self.assertEqual(output, Path("/measurements/run_01_abort_analysis.xlsx"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = analysis_output_path((str(root / "run_01.mf4"),))
+        self.assertEqual(output, root / "run_01_abort_analysis.xlsx")
 
     def test_batch_report_is_saved_in_shared_measurement_folder(self):
-        output = analysis_output_path(
-            ("/measurements/run_01.mf4", "/measurements/run_02.mdf")
-        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = analysis_output_path(
+                (str(root / "run_01.mf4"), str(root / "run_02.mdf"))
+            )
         self.assertEqual(
             output,
-            Path("/measurements/combined_2_files_abort_analysis.xlsx"),
+            root / "combined_2_files_abort_analysis.xlsx",
         )
 
     def test_batch_measurements_in_different_folders_are_rejected(self):
-        with self.assertRaisesRegex(InputValidationError, "must be in the same folder"):
-            analysis_output_path(
-                ("/measurements/a/run_01.mf4", "/measurements/b/run_02.mdf")
-            )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "a" / "run_01.mf4"
+            second = root / "b" / "run_02.mdf"
+            with self.assertRaisesRegex(InputValidationError, "must be in the same folder"):
+                analysis_output_path((str(first), str(second)))
 
 
 if __name__ == "__main__":
