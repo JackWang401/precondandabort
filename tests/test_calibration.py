@@ -1,4 +1,7 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from precond_abort.calibration import CalibrationRepository
 from precond_abort.errors import CalibrationError
@@ -96,6 +99,44 @@ class CalibrationRepositoryTests(unittest.TestCase):
         repository = CalibrationRepository.from_document(document)
         with self.assertRaisesRegex(CalibrationError, "2 x values but 1 y values"):
             repository.resolve("Bad")
+
+    def test_loads_entries_from_two_json_files_with_source_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "motion_a.json"
+            second = Path(directory) / "motion_b.json"
+            first.write_text(
+                json.dumps(
+                    {"first": {"SpeedPoints": {"unit": "km/h", "value": [0, 50]}}}
+                ),
+                encoding="utf-8",
+            )
+            second.write_text(
+                json.dumps(
+                    {"second": {"AngleLimit": {"unit": "deg", "value": [100, 20]}}}
+                ),
+                encoding="utf-8",
+            )
+
+            repository = CalibrationRepository.from_json_files((first, second))
+            parameter = repository.combine_entries(
+                "SteeringWheelAngle_Th",
+                "SpeedPoints",
+                "AngleLimit",
+            )
+
+            self.assertEqual(parameter.value_at(25), 60)
+            self.assertTrue(parameter.x_source.startswith("motion_a.json::"))
+            self.assertTrue(parameter.y_source.startswith("motion_b.json::"))
+
+    def test_rejects_selecting_the_same_json_file_twice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "calibration.json"
+            path.write_text(
+                json.dumps({"cal": {"Value": {"value": 1}}}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(CalibrationError, "different calibration JSON files"):
+                CalibrationRepository.from_json_files((path, path))
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -74,6 +74,66 @@ class CalibrationRepository:
         except (OSError, json.JSONDecodeError) as exc:
             raise CalibrationError(f"Cannot read calibration JSON {source_path}: {exc}") from exc
         return cls.from_document(document, source_path=source_path)
+
+    @classmethod
+    def from_json_files(cls, paths: Iterable[str | Path]) -> "CalibrationRepository":
+        """Load calibration entries from one or more JSON files.
+
+        Sources are namespaced with their originating filename when multiple files
+        are loaded. This preserves provenance in the HMI and output report while
+        still allowing calParam to resolve an entry by its leaf name.
+        """
+
+        source_paths = tuple(Path(path).expanduser().resolve() for path in paths)
+        if not source_paths:
+            raise CalibrationError("Select at least one calibration JSON file")
+        if len(set(source_paths)) != len(source_paths):
+            raise CalibrationError("Select different calibration JSON files")
+        repositories = tuple(cls.from_json(path) for path in source_paths)
+        if len(repositories) == 1:
+            return repositories[0]
+
+        filename_counts = Counter(path.name for path in source_paths)
+        parameters: list[CalibrationParameter] = []
+        entries: list[CalibrationEntry] = []
+        invalid_parameters: dict[str, str] = {}
+
+        for path, repository in zip(source_paths, repositories):
+            label = path.name if filename_counts[path.name] == 1 else str(path)
+
+            def scoped(source: str) -> str:
+                return f"{label}::{source}" if source else ""
+
+            entries.extend(
+                CalibrationEntry(
+                    name=entry.name,
+                    source=scoped(entry.source),
+                    values=entry.values,
+                    unit=entry.unit,
+                )
+                for entry in repository._entries
+            )
+            parameters.extend(
+                CalibrationParameter(
+                    name=parameter.name,
+                    source=scoped(parameter.source),
+                    x_values=parameter.x_values,
+                    y_values=parameter.y_values,
+                    x_unit=parameter.x_unit,
+                    y_unit=parameter.y_unit,
+                    x_source=scoped(parameter.x_source),
+                    y_source=scoped(parameter.y_source),
+                )
+                for parameter in repository._parameters
+            )
+            for key, message in repository._invalid_parameters.items():
+                invalid_parameters.setdefault(key, f"{label}: {message}")
+
+        return cls(
+            parameters,
+            invalid_parameters=invalid_parameters,
+            entries=entries,
+        )
 
     @classmethod
     def from_document(

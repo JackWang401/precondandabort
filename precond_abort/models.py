@@ -128,4 +128,9 @@ class AnalysisResult:
     events: tuple[AbortEvent, ...]
     mapping: MappingConfiguration
     parameters: Mapping[str, CalibrationParameter]
+    input_files: tuple[Path, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
+
+    @property
+    def source_files(self) -> tuple[Path, ...]:
+        return self.input_files or (self.input_file,)

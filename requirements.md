@@ -3,20 +3,21 @@
 ## 1. Human-machine interface (HMI)
 
 1. The HMI shall provide controls for loading:
-   - a calibration JSON file;
-   - an MDF/MF4 measurement file;
+   - two calibration JSON files;
+   - one or more MDF/MF4 measurement files;
    - a configuration workbook in Apple Numbers (`.numbers`) or Excel (`.xlsx` or `.xlsm`) format; and
    - the output Excel report path.
-2. The HMI shall not assume that the calibration JSON file is stored in a fixed location. When the HMI starts, it shall open a file-navigation dialog that allows the user to locate the JSON file. The same dialog shall remain available through the JSON `Browse` control.
-3. Before a calibration JSON file is loaded, the HMI shall display placeholder rows for the four active motion calibratables: steering-wheel angle, steering-wheel-angle speed, yaw rate, and lateral acceleration.
-4. After a calibration JSON file is loaded, the software shall discover every numeric JSON entry that can be used as calibration data.
+2. The HMI shall not assume that either calibration JSON file is stored in a fixed location. When the HMI starts, it shall open file-navigation dialogs that allow the user to locate both JSON files. Separate `Browse` controls shall remain available for the two files.
+3. Before both calibration JSON files are loaded, the HMI shall display placeholder rows for the four active motion calibratables: steering-wheel angle, steering-wheel-angle speed, yaw rate, and lateral acceleration.
+4. After both calibration JSON files are loaded, the software shall discover every numeric JSON entry that can be used as calibration data. Each entry shall retain the name of its originating JSON file.
 5. The `calParam` tab in the configuration workbook shall supply the parameter name and the exact JSON entry names to use as X and Y for each motion calibratable.
-6. After both the configuration workbook and JSON file are loaded, the HMI shall automatically retrieve and bind each motion X/Y pair specified by `calParam`. The HMI shall continue to allow the user to select a different X or Y entry explicitly.
+6. After the configuration workbook and both JSON files are loaded, the HMI shall automatically retrieve and bind each motion X/Y pair specified by `calParam`. X and Y may originate from different selected JSON files. The HMI shall continue to allow the user to select a different X or Y entry explicitly.
 7. The HMI shall provide a `constant — no X axis` option for scalar Y entries and arrays whose Y values are all equal.
 8. Before accepting a selected pair, the software shall verify that X and Y contain the same number of numeric values and that X contains no duplicate values.
 9. The analyzer shall use the accepted X/Y binding for its specific calibratable. It shall not silently replace an HMI selection with a predefined parameter.
 10. The HMI shall visualize the accepted X/Y pair using the useful features of the existing `cal_thd_intp` tool. At a minimum, it shall display the curve, its breakpoints, units, and the interpolated threshold at a user-specified vehicle speed.
 11. The HMI shall display validation messages, analysis progress, a visible notice that throttle checks are disabled, and a preview of the detected abort events.
+12. The MDF/MF4 `Browse` control shall allow the user to select multiple measurement files. The software shall analyze every selected file and combine the detected events into one output report while retaining the originating filename for each event.
 
 ## 2. Signal mapping
 
@@ -33,7 +34,7 @@
    - lateral acceleration;
    - and `abort_any_active_event`.
 4. Accelerator-pedal position and `aeb_deceleration_request` are optional until throttle checking is restored.
-5. Signal and column-name matching shall be case-insensitive and shall accept the documented aliases used by the supplied model-logger data. The known workbook spellings `rov/lateralAccceleration` and `rov/YawrateSuppression` shall resolve to the supplied MDF channels `rov/lateralAcceleration` and `rov/YawrateSuspension`, respectively, with a visible warning.
+5. Signal and column-name matching shall be case-insensitive. The supplied workbook shall use the MDF channels `rov/lateralAcceleration` and `rov/YawrateSuspension`. For compatibility with older workbooks, the former misspellings `rov/lateralAccceleration` and `rov/YawrateSuppression` shall resolve to the corrected channels with a visible warning.
 6. If `swIntfc` is absent, the software may use its documented built-in mapping for the supplied model-logger signals. It shall display a warning whenever this fallback is used.
 7. If `swIntfc` exists but is incomplete or invalid for the active motion analysis, the software shall stop and report the missing or invalid entries.
 
@@ -54,15 +55,16 @@
 ## 4. Data-analysis process
 
 1. The software shall identify each timestamp at which `abort_any_active_event` changes from inactive to active (`0 -> 1`). Each transition represents one abort event.
-2. At each abort timestamp, the software shall obtain the corresponding signal values and calculate all applicable thresholds for the current vehicle speed.
-3. The software shall compare the following signal/threshold pairs:
+2. When multiple MDF/MF4 files are selected, the software shall apply the same accepted mapping and calibration bindings to each file and combine the results.
+3. At each abort timestamp, the software shall obtain the corresponding signal values and calculate all applicable thresholds for the current vehicle speed.
+4. The software shall compare the following signal/threshold pairs:
    - steering-wheel angle;
    - steering-wheel-angle rate;
    - yaw rate; and
    - lateral acceleration.
-4. A motion reason is active when the magnitude of its signal is greater than or equal to its threshold. Every active reason shall be recorded; reasons are not mutually exclusive.
-5. The software shall not read throttle signals, resolve throttle parameters, or evaluate `throttleInc` or `maxThrottle` while throttle checking is disabled.
-6. If none of the four motion reasons is active, the software shall mark the reason as `others`.
+5. A motion reason is active when the magnitude of its signal is greater than or equal to its threshold. Every active reason shall be recorded; reasons are not mutually exclusive.
+6. The software shall not read throttle signals, resolve throttle parameters, or evaluate `throttleInc` or `maxThrottle` while throttle checking is disabled.
+7. If none of the four motion reasons is active, the software shall mark the reason as `others`.
 
 ## 5. Excel output
 
@@ -83,6 +85,7 @@
 9. The report shall include sufficient audit detail to show the signed motion-signal values, calculated motion thresholds, disabled throttle state, and resolved abort reason for each event.
 10. The report shall also record the signal mapping, the originating `calParam` row, and the exact X and Y JSON sources used for every active motion threshold.
 11. The workbook shall be formatted for readability. The primary worksheet shall freeze its two header rows and first three columns; applicable audit tables shall include filters and frozen headers.
+12. The run-information worksheet shall list every MDF/MF4 file included in a batch report.
 
 ## 6. Validation and error handling
 

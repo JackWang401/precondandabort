@@ -5,15 +5,15 @@ A local desktop HMI and command-line tool for classifying AEB abort events in MD
 ## What is implemented
 
 - Direct `.numbers`, `.xlsx`, and `.xlsm` reading for `swIntfc` and `calParam`
-- Automatic JSON X/Y lookup from the parameter names in `calParam`, with optional manual override
+- Combined calibration lookup across two user-selected JSON files, with automatic X/Y binding from `calParam` and optional manual override
 - Linear threshold interpolation with endpoint clamping
-- A desktop HMI with file selectors, calibration curve visualization, live interpolation, progress, and event preview
+- A desktop HMI with two JSON selectors, multi-file MDF/MF4 selection, calibration curve visualization, live interpolation, progress, and event preview
 - Case-insensitive `swIntfc` signal mapping with documented acronym aliases
 - A warning-backed built-in mapping when the supplied workbook has no `swIntfc` sheet
 - MDF/MF4 reading through `asammdf`
 - Motion and `others` classification; throttle checks are temporarily disabled
 - A formatted Excel report with two-level `actual / thd / result` comparison groups, plus event, mapping, parameter, and run-detail sheets
-- A CLI for repeatable or batch execution
+- A CLI for repeatable single-file execution
 
 ## Installation
 
@@ -32,9 +32,11 @@ source .venv/bin/activate
 python run_app.py
 ```
 
-When the HMI starts, the four active motion calibratables are visible as placeholder rows and a file-navigation dialog prompts you to locate the calibration JSON file. The application does not assume that the JSON file is in the repository or any other fixed location. If the dialog is cancelled, use **Browse** beside **Calibration JSON** when you are ready.
+When the HMI starts, the four active motion calibratables are visible as placeholder rows, and file-navigation dialogs prompt you to locate two calibration JSON files. The application does not assume that either file is in the repository or another fixed location. If a dialog is cancelled, use the separate **Browse** control beside **Calibration JSON 1** or **Calibration JSON 2** when you are ready.
 
-The application reads each motion parameter and its X/Y JSON entry names from the configuration workbook's `calParam` tab. After the JSON file is loaded, matching pairs are retrieved automatically and marked **calParam** in the HMI. Select a row to preview its curve and interpolated threshold. You can still choose different entries and select **Use selected X/Y** to override that row. Use `constant — no X axis` when the selected Y entry is scalar or all of its values are equal.
+The application combines the numeric entries from both JSON files and labels each source with its originating filename. It then reads each motion parameter and its X/Y entry names from the configuration workbook's `calParam` tab. X and Y may come from different JSON files. Matching pairs are retrieved automatically and marked **calParam** in the HMI. Select a row to preview its curve and interpolated threshold. You can still choose different entries and select **Use selected X/Y** to override that row. Use `constant — no X axis` when the selected Y entry is scalar or all of its values are equal.
+
+The **Measurement MDF/MF4 files** selector accepts one or more files in a single selection. Every selected file is analyzed with the same mapping and calibration bindings, and all events are written to one Excel report. The HMI preview and report retain the originating filename for each event.
 
 The analyzer currently uses bindings for steering-wheel angle, steering-wheel-angle speed, yaw rate, and lateral acceleration. Pair validation rejects mismatched point counts and duplicate X values before the analysis starts. Throttle signals and parameters are not required until the missing throttle parameter has been added to `calParam`.
 
@@ -81,7 +83,7 @@ Create a clean template with:
 python -m precond_abort.cli mapping-template mapping_template.xlsx
 ```
 
-The supplied `PrecondAndAbort.numbers` file is read directly; no Excel export is required. The known spellings `rov/lateralAccceleration` and `rov/YawrateSuppression` are mapped to the corresponding supplied MDF channels with a visible warning. A workbook that contains `swIntfc` is otherwise validated strictly.
+The supplied `PrecondAndAbort.numbers` file is read directly; no Excel export is required. Its `swIntfc` tab uses the corrected MDF channels `rov/lateralAcceleration` and `rov/YawrateSuspension`. For compatibility with older workbooks, the former misspellings `rov/lateralAccceleration` and `rov/YawrateSuppression` are still accepted with a visible warning. A workbook that contains `swIntfc` is otherwise validated strictly.
 
 ## Analysis behavior
 

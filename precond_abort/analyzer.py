@@ -94,6 +94,7 @@ class AbortAnalyzer:
             events=events,
             mapping=mapping,
             parameters=used_parameters,
+            input_files=(Path(input_file),),
             warnings=warnings,
         )
 
@@ -146,3 +147,25 @@ class AbortAnalyzer:
             throttle_increase=None,
             deceleration_start=None,
         )
+
+
+def combine_analysis_results(results: tuple[AnalysisResult, ...]) -> AnalysisResult:
+    """Combine per-measurement results for one batch report."""
+
+    if not results:
+        raise InputValidationError("Select at least one MDF/MF4 measurement file")
+    first = results[0]
+    return AnalysisResult(
+        input_file=first.input_file,
+        input_files=tuple(
+            input_file
+            for result in results
+            for input_file in result.source_files
+        ),
+        events=tuple(event for result in results for event in result.events),
+        mapping=first.mapping,
+        parameters=first.parameters,
+        warnings=tuple(
+            dict.fromkeys(warning for result in results for warning in result.warnings)
+        ),
+    )

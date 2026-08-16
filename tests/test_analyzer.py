@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-from precond_abort.analyzer import AbortAnalyzer
+from precond_abort.analyzer import AbortAnalyzer, combine_analysis_results
 from precond_abort.calibration import CalibrationRepository
 from precond_abort.mapping import default_mapping
 from precond_abort.models import SignalSeries
@@ -107,6 +107,22 @@ class AbortAnalyzerTests(unittest.TestCase):
             result.parameters["SteeringWheelAngle_Th"].source,
             "manual:user.x + user.y",
         )
+
+    def test_combines_events_from_multiple_measurements(self):
+        first = AbortAnalyzer().analyze(
+            self._source(), self.mapping, self.calibrations, "first.mf4"
+        )
+        second = AbortAnalyzer().analyze(
+            self._source(), self.mapping, self.calibrations, "second.mdf"
+        )
+
+        combined = combine_analysis_results((first, second))
+
+        self.assertEqual(combined.source_files, (Path("first.mf4"), Path("second.mdf")))
+        self.assertEqual(len(combined.events), 6)
+        self.assertEqual(combined.events[0].filename, "first.mf4")
+        self.assertEqual(combined.events[3].filename, "second.mdf")
+        self.assertEqual(len(combined.warnings), len(first.warnings))
 
 
 if __name__ == "__main__":

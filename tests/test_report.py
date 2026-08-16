@@ -4,7 +4,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from precond_abort.analyzer import AbortAnalyzer
+from precond_abort.analyzer import AbortAnalyzer, combine_analysis_results
 from precond_abort.calibration import CalibrationRepository
 from precond_abort.mapping import default_mapping
 from precond_abort.report import OUTPUT_HEADER_ROW_1, OUTPUT_HEADER_ROW_2, write_report
@@ -50,6 +50,29 @@ class ReportTests(unittest.TestCase):
             parameter_headers = [cell.value for cell in workbook["Parameters"][1]]
             self.assertEqual(parameter_headers[2:4], ["X Source", "Y Source"])
             self.assertEqual(workbook["Run Information"]["B5"].value, 3)
+            workbook.close()
+
+    def test_report_lists_every_input_measurement(self):
+        fixture = analyzer_fixtures.AbortAnalyzerTests()
+        fixture.setUp()
+        results = tuple(
+            AbortAnalyzer().analyze(
+                fixture._source(), fixture.mapping, fixture.calibrations, filename
+            )
+            for filename in ("first.mf4", "second.mdf")
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_report(
+                combine_analysis_results(results),
+                Path(directory) / "batch_report.xlsx",
+            )
+            workbook = load_workbook(path, data_only=False)
+            self.assertEqual(
+                workbook["Run Information"]["B2"].value,
+                "first.mf4\nsecond.mdf",
+            )
+            self.assertEqual(workbook["Abort Analysis"]["A6"].value, "second.mdf")
+            self.assertEqual(workbook["Run Information"]["B5"].value, 6)
             workbook.close()
 
 

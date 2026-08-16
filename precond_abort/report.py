@@ -75,6 +75,7 @@ OUTPUT_HEADER_ROW_2 = (
 )
 
 OUTPUT_PREVIEW_HEADERS = (
+    "File Name",
     "timestamp",
     "speed",
     "angle actual",
@@ -225,7 +226,7 @@ def write_report(result: AnalysisResult, output_path: str | Path) -> Path:
     metadata = workbook.create_sheet("Run Information")
     metadata_rows = [
         ("Precondition and Abort Analysis", ""),
-        ("Input measurement", str(result.input_file)),
+        ("Input measurements", "\n".join(str(path) for path in result.source_files)),
         ("Mapping source", result.mapping.source),
         ("Generated (UTC)", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")),
         ("Abort events", len(result.events)),

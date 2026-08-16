@@ -6,9 +6,9 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from .analyzer import AbortAnalyzer
+from .analyzer import AbortAnalyzer, combine_analysis_results
 from .calibration import CalibrationRepository
-from .errors import PrecondAbortError
+from .errors import InputValidationError, PrecondAbortError
 from .mapping import load_calibration_specs, load_mapping, match_motion_calibration_specs
 from .mdf_reader import MDFSignalSource
 from .models import AnalysisResult, CalibrationBindingSpec, CalibrationParameter
@@ -48,7 +48,8 @@ class AnalyzerApp:
         self.root.minsize(1080, 720)
         self.root.configure(background=BG)
 
-        self.calibration_path = tk.StringVar()
+        self.calibration_path_1 = tk.StringVar()
+        self.calibration_path_2 = tk.StringVar()
         self.measurement_path = tk.StringVar()
         self.mapping_path = tk.StringVar()
         self.output_path = tk.StringVar()
@@ -60,13 +61,18 @@ class AnalyzerApp:
         self.mapping_status = tk.StringVar(value="Mapping not loaded")
         self.parameter_value = tk.StringVar(value="Select a calibration parameter")
         self._calibrations: CalibrationRepository | None = None
-        self._loaded_calibration_path: str | None = None
+        self._loaded_calibration_paths: tuple[str, ...] | None = None
+        self._measurement_paths: tuple[str, ...] = ()
+        self._output_was_auto = False
         self._entry_by_display = {}
         self._display_by_source: dict[str, str] = {}
         self._calibration_specs: dict[str, CalibrationBindingSpec] = {}
         self._calibration_bindings: dict[str, CalibrationParameter] = {}
         self._analysis_overrides: dict[str, CalibrationParameter] = {}
-        self._analysis_paths: dict[str, str] = {}
+        self._analysis_calibration_paths: tuple[str, ...] = ()
+        self._analysis_measurement_paths: tuple[str, ...] = ()
+        self._analysis_mapping_path = ""
+        self._analysis_output_path = ""
         self._worker_messages: queue.Queue = queue.Queue()
         self._result: AnalysisResult | None = None
 
@@ -117,12 +123,13 @@ class AnalyzerApp:
         files.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
         files.columnconfigure(1, weight=1)
         ttk.Label(files, text="1  Input files", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
-        self._file_row(files, 1, "Calibration JSON", self.calibration_path, "json")
-        self._file_row(files, 2, "Measurement MDF/MF4", self.measurement_path, "mdf")
-        self._file_row(files, 3, "Configuration workbook", self.mapping_path, "mapping")
-        self._file_row(files, 4, "Output Excel report", self.output_path, "output")
+        self._file_row(files, 1, "Calibration JSON 1", self.calibration_path_1, "json_1")
+        self._file_row(files, 2, "Calibration JSON 2", self.calibration_path_2, "json_2")
+        self._file_row(files, 3, "Measurement MDF/MF4 files", self.measurement_path, "mdf", readonly=True)
+        self._file_row(files, 4, "Configuration workbook", self.mapping_path, "mapping")
+        self._file_row(files, 5, "Output Excel report", self.output_path, "output")
         ttk.Label(files, textvariable=self.mapping_status, style="Warning.TLabel").grid(
-            row=5, column=1, columnspan=2, sticky="w", pady=(5, 0)
+            row=6, column=1, columnspan=2, sticky="w", pady=(5, 0)
         )
 
         explorer = ttk.Frame(main, style="Card.TFrame", padding=16)
@@ -222,7 +229,9 @@ class AnalyzerApp:
         tree_frame.rowconfigure(0, weight=1)
         self.results_tree = ttk.Treeview(tree_frame, columns=OUTPUT_PREVIEW_HEADERS, show="headings")
         for heading in OUTPUT_PREVIEW_HEADERS:
-            if heading == "timestamp":
+            if heading == "File Name":
+                width = 180
+            elif heading == "timestamp":
                 width = 108
             elif heading == "speed" or heading == "others":
                 width = 76
@@ -239,9 +248,17 @@ class AnalyzerApp:
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
 
-    def _file_row(self, parent, row: int, label: str, variable: tk.StringVar, kind: str) -> None:
+    def _file_row(
+        self,
+        parent,
+        row: int,
+        label: str,
+        variable: tk.StringVar,
+        kind: str,
+        readonly: bool = False,
+    ) -> None:
         ttk.Label(parent, text=label, style="Body.TLabel", width=24).grid(row=row, column=0, sticky="w", pady=3)
-        entry = ttk.Entry(parent, textvariable=variable)
+        entry = ttk.Entry(parent, textvariable=variable, state="readonly" if readonly else "normal")
         entry.grid(row=row, column=1, sticky="ew", padx=(6, 8), pady=3)
         ttk.Button(parent, text="Browse", style="Secondary.TButton", command=lambda: self._browse(kind)).grid(
             row=row, column=2, pady=3
@@ -253,38 +270,73 @@ class AnalyzerApp:
         numbers_workbook = cwd / "PrecondAndAbort.numbers"
         excel_workbook = cwd / "PrecondAndAbort.xlsx"
         workbook = numbers_workbook if numbers_workbook.exists() else excel_workbook
-        if len(mdf_files) == 1:
-            self.measurement_path.set(str(mdf_files[0]))
+        if mdf_files:
+            self._set_measurement_paths(tuple(str(path) for path in mdf_files))
         if workbook.exists():
             self.mapping_path.set(str(workbook))
             self._load_mapping_status()
-        if mdf_files:
-            self.output_path.set(str(cwd / "outputs" / f"{mdf_files[0].stem}_abort_analysis.xlsx"))
 
     def _prompt_for_calibration(self) -> None:
-        if self.calibration_path.get().strip():
+        if self.calibration_path_1.get().strip() and self.calibration_path_2.get().strip():
             return
-        self.status.set("Select a calibration JSON file to configure the X/Y bindings")
-        self._browse("json")
-        if not self.calibration_path.get().strip():
-            self.status.set("Waiting for a calibration JSON file — use Browse when ready")
+        self.status.set("Select both calibration JSON files to configure the X/Y bindings")
+        if not self.calibration_path_1.get().strip():
+            self._browse("json_1")
+        if self.calibration_path_1.get().strip() and not self.calibration_path_2.get().strip():
+            self._browse("json_2")
+        if not self._selected_calibration_paths():
+            self.status.set("Waiting for two calibration JSON files — use the Browse controls when ready")
+
+    def _selected_calibration_paths(self) -> tuple[str, ...]:
+        values = (
+            self.calibration_path_1.get().strip(),
+            self.calibration_path_2.get().strip(),
+        )
+        if not all(values):
+            return ()
+        return tuple(str(Path(value).expanduser().resolve()) for value in values)
+
+    def _set_measurement_paths(self, paths: tuple[str, ...]) -> None:
+        self._measurement_paths = tuple(
+            str(Path(path).expanduser().resolve()) for path in paths
+        )
+        self.measurement_path.set("; ".join(self._measurement_paths))
+        if not self._measurement_paths:
+            return
+        if not self.output_path.get().strip() or self._output_was_auto:
+            first = Path(self._measurement_paths[0])
+            output_directory = first.parent
+            local_outputs = Path.cwd() / "outputs"
+            if first.parent == Path.cwd() and local_outputs.exists():
+                output_directory = local_outputs
+            if len(self._measurement_paths) == 1:
+                filename = f"{first.stem}_abort_analysis.xlsx"
+            else:
+                filename = f"combined_{len(self._measurement_paths)}_files_abort_analysis.xlsx"
+            self.output_path.set(str(output_directory / filename))
+            self._output_was_auto = True
 
     def _browse(self, kind: str) -> None:
-        if kind == "json":
-            selected = filedialog.askopenfilename(title="Select calibration JSON", filetypes=[("JSON files", "*.json")])
-            if selected:
-                self.calibration_path.set(selected)
-                self._load_calibrations()
-        elif kind == "mdf":
+        if kind in {"json_1", "json_2"}:
+            number = "1" if kind == "json_1" else "2"
             selected = filedialog.askopenfilename(
-                title="Select measurement file",
+                title=f"Select calibration JSON {number}",
+                filetypes=[("JSON files", "*.json")],
+            )
+            if selected:
+                target = self.calibration_path_1 if kind == "json_1" else self.calibration_path_2
+                target.set(selected)
+                if self._selected_calibration_paths():
+                    self._load_calibrations()
+                else:
+                    self.status.set("Select the second calibration JSON file")
+        elif kind == "mdf":
+            selected = filedialog.askopenfilenames(
+                title="Select one or more measurement files",
                 filetypes=[("MDF measurements", "*.mf4 *.mdf"), ("All files", "*")],
             )
             if selected:
-                self.measurement_path.set(selected)
-                if not self.output_path.get():
-                    source = Path(selected)
-                    self.output_path.set(str(source.with_name(f"{source.stem}_abort_analysis.xlsx")))
+                self._set_measurement_paths(tuple(selected))
         elif kind == "mapping":
             selected = filedialog.askopenfilename(
                 title="Select configuration workbook",
@@ -305,12 +357,15 @@ class AnalyzerApp:
             )
             if selected:
                 self.output_path.set(selected)
+                self._output_was_auto = False
 
     def _load_calibrations(self) -> None:
         try:
-            calibration_path = str(Path(self.calibration_path.get()).expanduser().resolve())
-            self._calibrations = CalibrationRepository.from_json(calibration_path)
-            self._loaded_calibration_path = calibration_path
+            calibration_paths = self._selected_calibration_paths()
+            if len(calibration_paths) != 2:
+                raise InputValidationError("Select both calibration JSON files")
+            self._calibrations = CalibrationRepository.from_json_files(calibration_paths)
+            self._loaded_calibration_paths = calibration_paths
             self._entry_by_display = {
                 f"{entry.name}  —  {entry.source}  [{len(entry.values)} value{'s' if len(entry.values) != 1 else ''}]": entry
                 for entry in self._calibrations.entries
@@ -331,15 +386,15 @@ class AnalyzerApp:
             self._show_selected_binding()
             if all_bound:
                 self.status.set(
-                    f"Loaded {len(displays)} numeric JSON entries and applied four calParam motion pairs"
+                    f"Loaded {len(displays)} numeric entries from two JSON files and applied four calParam motion pairs"
                 )
             else:
                 self.status.set(
-                    f"Loaded {len(displays)} numeric JSON entries; load or correct the calParam workbook"
+                    f"Loaded {len(displays)} numeric entries from two JSON files; load or correct the calParam workbook"
                 )
         except PrecondAbortError as exc:
             self._calibrations = None
-            self._loaded_calibration_path = None
+            self._loaded_calibration_paths = None
             self._entry_by_display = {}
             self._display_by_source = {}
             self._calibration_bindings = {}
@@ -348,7 +403,7 @@ class AnalyzerApp:
             self.x_entry_selection.set("")
             self.y_entry_selection.set("")
             self._refresh_binding_table()
-            messagebox.showerror("Calibration JSON", str(exc), parent=self.root)
+            messagebox.showerror("Calibration JSON files", str(exc), parent=self.root)
 
     def _on_binding_row_selected(self, _event=None) -> None:
         selected = self.binding_tree.selection()
@@ -405,7 +460,7 @@ class AnalyzerApp:
                 self._display_by_source.get(y_entry.source, "") if y_entry else ""
             )
             if self._calibrations is None:
-                self.parameter_value.set("Load a calibration JSON file to enable X/Y selection.")
+                self.parameter_value.set("Load both calibration JSON files to enable X/Y selection.")
             elif spec is None:
                 self.parameter_value.set("Load a workbook with a valid calParam tab.")
             else:
@@ -427,7 +482,7 @@ class AnalyzerApp:
             if show_error:
                 messagebox.showerror(
                     "Calibration binding",
-                    "Load a calibration JSON file first.",
+                    "Load both calibration JSON files first.",
                     parent=self.root,
                 )
             return False
@@ -505,7 +560,7 @@ class AnalyzerApp:
         if errors and show_error:
             messagebox.showerror(
                 "calParam JSON lookup",
-                "The following calParam entries could not be loaded from the JSON file:\n- "
+                "The following calParam entries could not be loaded from the selected JSON files:\n- "
                 + "\n- ".join(errors),
                 parent=self.root,
             )
@@ -585,19 +640,21 @@ class AnalyzerApp:
 
     def _run_analysis(self) -> None:
         paths = {
-            "Calibration JSON": self.calibration_path.get(),
-            "Measurement MDF/MF4": self.measurement_path.get(),
+            "Calibration JSON 1": self.calibration_path_1.get(),
+            "Calibration JSON 2": self.calibration_path_2.get(),
             "Configuration workbook": self.mapping_path.get(),
             "Output report": self.output_path.get(),
         }
         missing = [label for label, value in paths.items() if not value.strip()]
+        if not self._measurement_paths:
+            missing.append("Measurement MDF/MF4 file(s)")
         if missing:
             messagebox.showerror("Missing input", "Select the following files:\n- " + "\n- ".join(missing), parent=self.root)
             return
-        selected_calibration_path = str(Path(paths["Calibration JSON"]).expanduser().resolve())
-        if self._loaded_calibration_path != selected_calibration_path:
+        selected_calibration_paths = self._selected_calibration_paths()
+        if self._loaded_calibration_paths != selected_calibration_paths:
             self._load_calibrations()
-        if self._calibrations is None or self._loaded_calibration_path != selected_calibration_path:
+        if self._calibrations is None or self._loaded_calibration_paths != selected_calibration_paths:
             return
         unbound = [
             label
@@ -612,32 +669,43 @@ class AnalyzerApp:
             )
             return
         self._analysis_overrides = dict(self._calibration_bindings)
-        self._analysis_paths = {label: value.strip() for label, value in paths.items()}
+        self._analysis_calibration_paths = selected_calibration_paths
+        self._analysis_measurement_paths = self._measurement_paths
+        self._analysis_mapping_path = paths["Configuration workbook"].strip()
+        self._analysis_output_path = paths["Output report"].strip()
         self.run_button.configure(state="disabled")
         self.progress.start(12)
-        self.status.set("Analyzing the measurement file…")
+        count = len(self._analysis_measurement_paths)
+        self.status.set(f"Analyzing {count} measurement file{'s' if count != 1 else ''}…")
         self.summary.configure(text="Analysis in progress")
         worker = threading.Thread(target=self._analysis_worker, daemon=True)
         worker.start()
 
     def _analysis_worker(self) -> None:
         try:
-            paths = self._analysis_paths
-            calibration_path = paths["Calibration JSON"]
-            measurement_path = paths["Measurement MDF/MF4"]
-            mapping_path = paths["Configuration workbook"]
-            output_path = paths["Output report"]
-            calibrations = CalibrationRepository.from_json(calibration_path)
-            mapping = load_mapping(mapping_path)
-            with MDFSignalSource(measurement_path) as source:
-                result = AbortAnalyzer().analyze(
-                    source,
-                    mapping,
-                    calibrations,
-                    measurement_path,
-                    parameter_overrides=self._analysis_overrides,
-                )
-            output = write_report(result, output_path)
+            calibrations = CalibrationRepository.from_json_files(
+                self._analysis_calibration_paths
+            )
+            mapping = load_mapping(self._analysis_mapping_path)
+            results: list[AnalysisResult] = []
+            for measurement_path in self._analysis_measurement_paths:
+                try:
+                    with MDFSignalSource(measurement_path) as source:
+                        results.append(
+                            AbortAnalyzer().analyze(
+                                source,
+                                mapping,
+                                calibrations,
+                                measurement_path,
+                                parameter_overrides=self._analysis_overrides,
+                            )
+                        )
+                except PrecondAbortError as exc:
+                    raise InputValidationError(
+                        f"{Path(measurement_path).name}: {exc}"
+                    ) from exc
+            result = combine_analysis_results(tuple(results))
+            output = write_report(result, self._analysis_output_path)
             self._worker_messages.put(("success", result, output))
         except Exception as exc:
             self._worker_messages.put(("error", exc))
@@ -665,11 +733,11 @@ class AnalyzerApp:
         for event in result.events:
             row = event.output_row()
             preview = []
-            for index, value in enumerate(row[1:]):
+            for index, value in enumerate(row):
                 if value is None:
                     preview.append("")
                 elif isinstance(value, float):
-                    preview.append(f"{value:.6f}" if index == 0 else f"{value:.3f}")
+                    preview.append(f"{value:.6f}" if index == 1 else f"{value:.3f}")
                 else:
                     preview.append(value)
             self.results_tree.insert("", "end", values=preview)
@@ -678,7 +746,13 @@ class AnalyzerApp:
             for name in OUTPUT_REASON_FLAGS
         }
         reason_text = " · ".join(f"{name}: {count}" for name, count in counts.items() if count)
-        self.summary.configure(text=f"{len(result.events)} abort events  |  {reason_text or 'No active reasons'}")
+        file_count = len(result.source_files)
+        self.summary.configure(
+            text=(
+                f"{file_count} measurement file{'s' if file_count != 1 else ''} · "
+                f"{len(result.events)} abort events  |  {reason_text or 'No active reasons'}"
+            )
+        )
         self.status.set(f"Complete — report saved to {output}")
         self.mapping_status.set(result.mapping.warning or f"Mapping used: {result.mapping.source}")
 
