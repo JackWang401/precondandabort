@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
+import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -25,15 +28,94 @@ LINE = "#D7E0E6"
 WARNING = "#9A5B00"
 CONSTANT_X_OPTION = "(constant — no X axis)"
 LOAD_CONFIG_PLACEHOLDER = "Load calParam first"
+VCS_CAL_LABEL = "VCS CAL"
+SAFETY_CAL_LABEL = "SAFETY CAL"
 PATH_STATE_VERSION = 1
-PATH_STATE_PATH = Path(__file__).resolve().parent.parent / ".precond_abort_state.json"
+APPLICATION_NAME = "PrecondAbortAnalyzer"
+
+
+def default_path_state_path(
+    platform_name: str | None = None,
+    environment: dict[str, str] | None = None,
+    home_directory: str | Path | None = None,
+) -> Path:
+    """Return a writable per-user state path for the current platform."""
+
+    active_platform = platform_name or os.name
+    if active_platform == "nt":
+        active_environment = os.environ if environment is None else environment
+        local_app_data = active_environment.get("LOCALAPPDATA", "").strip()
+        if local_app_data:
+            base = Path(local_app_data)
+        else:
+            home = Path(home_directory) if home_directory is not None else Path.home()
+            base = home / "AppData" / "Local"
+        return base / APPLICATION_NAME / "state.json"
+    return Path(__file__).resolve().parent.parent / ".precond_abort_state.json"
+
+
+def application_resource_directory() -> Path:
+    """Return the source or PyInstaller resource directory."""
+
+    bundled_directory = getattr(sys, "_MEIPASS", None)
+    if bundled_directory:
+        return Path(bundled_directory)
+    return Path(__file__).resolve().parent.parent
+
+
+def default_mapping_workbook(
+    directories: tuple[Path, ...],
+    platform_name: str | None = None,
+) -> Path | None:
+    """Find the bundled/sample workbook, preferring Excel on Windows."""
+
+    active_platform = platform_name or os.name
+    filenames = (
+        ("PrecondAndAbort.xlsx", "PrecondAndAbort.xlsm", "PrecondAndAbort.numbers")
+        if active_platform == "nt"
+        else ("PrecondAndAbort.numbers", "PrecondAndAbort.xlsx", "PrecondAndAbort.xlsm")
+    )
+    resolved_directories = tuple(
+        dict.fromkeys(path.resolve() for path in directories)
+    )
+    for filename in filenames:
+        for directory in resolved_directories:
+            candidate = directory / filename
+            if candidate.exists():
+                return candidate
+    return None
+
+
+def enable_windows_dpi_awareness(platform_name: str | None = None) -> bool:
+    """Ask Windows to render Tk controls sharply on high-DPI displays."""
+
+    if (platform_name or os.name) != "nt":
+        return False
+    try:
+        import ctypes
+
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError, OSError):
+            ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        return False
+    return True
+
+
+PATH_STATE_PATH = default_path_state_path()
 
 THRESHOLD_BINDING_SPECS = (
     ("steering_wheel_angle", "Steering wheel angle", "SteeringWheelAngle_Th"),
     ("steering_wheel_angle_rate", "Steering wheel angle speed", "AEB_SteeringAngleRate_Override"),
     ("yaw_rate", "Yaw rate", "YawrateSuspension_Th"),
     ("lateral_acceleration", "Lateral acceleration", "LateralAcceleration_th"),
+    ("throttle_increase", "Throttle increase", "PedalPosProIncrease_Th"),
+    ("throttle_override", "Throttle override", "PedalPosPro_Override"),
+    ("throttle_max", "Maximum throttle", "PedalPosPro_th"),
 )
+MOTION_BINDING_ROLES = tuple(role for role, _, _ in THRESHOLD_BINDING_SPECS[:4])
+THROTTLE_BINDING_ROLES = tuple(role for role, _, _ in THRESHOLD_BINDING_SPECS[4:])
 ROLE_BY_LABEL = {label: role for role, label, _ in THRESHOLD_BINDING_SPECS}
 LABEL_BY_ROLE = {role: label for role, label, _ in THRESHOLD_BINDING_SPECS}
 DEFAULT_PARAMETER_NAME_BY_ROLE = {role: parameter for role, _, parameter in THRESHOLD_BINDING_SPECS}
@@ -41,6 +123,36 @@ DEFAULT_PARAMETER_NAME_BY_ROLE = {role: parameter for role, _, parameter in THRE
 
 def initial_binding_row(label: str) -> tuple[str, str, str, str]:
     return (label, LOAD_CONFIG_PLACEHOLDER, LOAD_CONFIG_PLACEHOLDER, "Waiting")
+
+
+def selected_calibration_paths(vcs_cal: str, safety_cal: str = "") -> tuple[str, ...]:
+    """Return the mandatory VCS CAL and the optional SAFETY CAL, when supplied."""
+
+    if not vcs_cal.strip():
+        return ()
+    paths = [str(Path(vcs_cal).expanduser().resolve())]
+    if safety_cal.strip():
+        paths.append(str(Path(safety_cal).expanduser().resolve()))
+    return tuple(paths)
+
+
+def with_json_provenance(
+    parameter: CalibrationParameter,
+    json_path: str | Path,
+) -> CalibrationParameter:
+    """Add the selected JSON filename to an automatically resolved binding."""
+
+    label = Path(json_path).name
+
+    def scoped(source: str) -> str:
+        return f"{label}::{source}" if source else ""
+
+    return replace(
+        parameter,
+        source=f"{parameter.source} [{label}]",
+        x_source=scoped(parameter.x_source),
+        y_source=scoped(parameter.y_source),
+    )
 
 
 def analysis_output_path(measurement_paths: tuple[str, ...]) -> Path:
@@ -126,8 +238,13 @@ class AnalyzerApp:
         self.interpolation_speed = tk.StringVar(value="50")
         self.status = tk.StringVar(value="Ready — select the input files to begin")
         self.mapping_status = tk.StringVar(value="Mapping not loaded")
+        self.throttle_status = tk.StringVar(
+            value=f"{SAFETY_CAL_LABEL} is optional; throttle checks are disabled."
+        )
         self.parameter_value = tk.StringVar(value="Select a calibration parameter")
         self._calibrations: CalibrationRepository | None = None
+        self._vcs_calibrations: CalibrationRepository | None = None
+        self._safety_calibrations: CalibrationRepository | None = None
         self._loaded_calibration_paths: tuple[str, ...] | None = None
         self._measurement_paths: tuple[str, ...] = ()
         self._entry_by_display = {}
@@ -136,6 +253,7 @@ class AnalyzerApp:
         self._calibration_bindings: dict[str, CalibrationParameter] = {}
         self._analysis_overrides: dict[str, CalibrationParameter] = {}
         self._analysis_calibration_paths: tuple[str, ...] = ()
+        self._analysis_throttle_checks_enabled = False
         self._analysis_measurement_paths: tuple[str, ...] = ()
         self._analysis_mapping_path = ""
         self._analysis_output_path = ""
@@ -192,8 +310,8 @@ class AnalyzerApp:
         files.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
         files.columnconfigure(1, weight=1)
         ttk.Label(files, text="1  Input files", style="Section.TLabel").grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
-        self._file_row(files, 1, "Calibration JSON 1", self.calibration_path_1, "json_1")
-        self._file_row(files, 2, "Calibration JSON 2", self.calibration_path_2, "json_2")
+        self._file_row(files, 1, f"{VCS_CAL_LABEL} (required)", self.calibration_path_1, "json_1")
+        self._file_row(files, 2, f"{SAFETY_CAL_LABEL} (optional)", self.calibration_path_2, "json_2")
         self._file_row(files, 3, "Measurement MDF/MF4 files", self.measurement_path, "mdf", readonly=True)
         self._file_row(files, 4, "Configuration workbook", self.mapping_path, "mapping")
         self._file_row(
@@ -216,7 +334,7 @@ class AnalyzerApp:
         ttk.Label(explorer, text="2  Calibration explorer", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
             explorer,
-            text="The calParam tab supplies the JSON X and Y names. Throttle checks are disabled.",
+            textvariable=self.throttle_status,
             style="Muted.TLabel",
         ).grid(row=1, column=0, sticky="w", pady=(2, 9))
 
@@ -358,8 +476,14 @@ class AnalyzerApp:
             return
         if not state:
             return
-        self.calibration_path_1.set(str(state["calibration_json_1"]))
-        self.calibration_path_2.set(str(state["calibration_json_2"]))
+        vcs_cal = str(state["calibration_json_1"])
+        safety_cal = str(state["calibration_json_2"])
+        self.calibration_path_1.set(vcs_cal)
+        # Earlier versions required two files, so the same file was sometimes
+        # saved in both fields. Treat that legacy state as no optional Safety CAL.
+        if vcs_cal and safety_cal and Path(vcs_cal).expanduser() == Path(safety_cal).expanduser():
+            safety_cal = ""
+        self.calibration_path_2.set(safety_cal)
         measurement_files = tuple(str(value) for value in state["measurement_files"])
         if measurement_files:
             self._set_measurement_paths(measurement_files)
@@ -392,12 +516,12 @@ class AnalyzerApp:
     def _populate_sample_paths(self) -> None:
         cwd = Path.cwd()
         mdf_files = sorted((*cwd.glob("*.mf4"), *cwd.glob("*.mdf")))
-        numbers_workbook = cwd / "PrecondAndAbort.numbers"
-        excel_workbook = cwd / "PrecondAndAbort.xlsx"
-        workbook = numbers_workbook if numbers_workbook.exists() else excel_workbook
+        workbook = default_mapping_workbook(
+            (cwd, application_resource_directory())
+        )
         if mdf_files and not self._measurement_paths:
             self._set_measurement_paths(tuple(str(path) for path in mdf_files))
-        if workbook.exists() and not self.mapping_path.get().strip():
+        if workbook is not None and not self.mapping_path.get().strip():
             self.mapping_path.set(str(workbook))
 
     def _load_initial_inputs(self) -> None:
@@ -407,24 +531,18 @@ class AnalyzerApp:
             self._load_calibrations(show_error=False)
 
     def _prompt_for_calibration(self) -> None:
-        if self.calibration_path_1.get().strip() and self.calibration_path_2.get().strip():
+        if self.calibration_path_1.get().strip():
             return
-        self.status.set("Select both calibration JSON files to configure the X/Y bindings")
-        if not self.calibration_path_1.get().strip():
-            self._browse("json_1")
-        if self.calibration_path_1.get().strip() and not self.calibration_path_2.get().strip():
-            self._browse("json_2")
+        self.status.set(f"Select the mandatory {VCS_CAL_LABEL} JSON file")
+        self._browse("json_1")
         if not self._selected_calibration_paths():
-            self.status.set("Waiting for two calibration JSON files — use the Browse controls when ready")
+            self.status.set(f"Waiting for {VCS_CAL_LABEL} — use Browse when ready")
 
     def _selected_calibration_paths(self) -> tuple[str, ...]:
-        values = (
-            self.calibration_path_1.get().strip(),
-            self.calibration_path_2.get().strip(),
+        return selected_calibration_paths(
+            self.calibration_path_1.get(),
+            self.calibration_path_2.get(),
         )
-        if not all(values):
-            return ()
-        return tuple(str(Path(value).expanduser().resolve()) for value in values)
 
     def _set_measurement_paths(self, paths: tuple[str, ...]) -> None:
         self._measurement_paths = tuple(
@@ -442,9 +560,9 @@ class AnalyzerApp:
 
     def _browse(self, kind: str) -> None:
         if kind in {"json_1", "json_2"}:
-            number = "1" if kind == "json_1" else "2"
+            label = VCS_CAL_LABEL if kind == "json_1" else SAFETY_CAL_LABEL
             selected = filedialog.askopenfilename(
-                title=f"Select calibration JSON {number}",
+                title=f"Select {label} JSON file",
                 filetypes=[("JSON files", "*.json")],
             )
             if selected:
@@ -454,11 +572,14 @@ class AnalyzerApp:
                 if self._selected_calibration_paths():
                     self._load_calibrations()
                 else:
-                    self.status.set("Select the second calibration JSON file")
+                    self.status.set(f"Select the mandatory {VCS_CAL_LABEL} JSON file")
         elif kind == "mdf":
             selected = filedialog.askopenfilenames(
                 title="Select one or more measurement files",
-                filetypes=[("MDF measurements", "*.mf4 *.mdf"), ("All files", "*")],
+                filetypes=[
+                    ("MDF measurements", ("*.mf4", "*.mdf")),
+                    ("All files", "*"),
+                ],
             )
             if selected:
                 self._set_measurement_paths(tuple(selected))
@@ -467,9 +588,9 @@ class AnalyzerApp:
             selected = filedialog.askopenfilename(
                 title="Select configuration workbook",
                 filetypes=[
-                    ("Numbers and Excel workbooks", "*.numbers *.xlsx *.xlsm"),
+                    ("Configuration workbooks", ("*.xlsx", "*.xlsm", "*.numbers")),
+                    ("Excel workbooks", ("*.xlsx", "*.xlsm")),
                     ("Apple Numbers", "*.numbers"),
-                    ("Excel workbooks", "*.xlsx *.xlsm"),
                 ],
             )
             if selected:
@@ -480,8 +601,16 @@ class AnalyzerApp:
     def _load_calibrations(self, show_error: bool = True) -> None:
         try:
             calibration_paths = self._selected_calibration_paths()
-            if len(calibration_paths) != 2:
-                raise InputValidationError("Select both calibration JSON files")
+            if not calibration_paths:
+                raise InputValidationError(f"Select the mandatory {VCS_CAL_LABEL} JSON file")
+            self._vcs_calibrations = CalibrationRepository.from_json(
+                calibration_paths[0]
+            )
+            self._safety_calibrations = (
+                CalibrationRepository.from_json(calibration_paths[1])
+                if len(calibration_paths) == 2
+                else None
+            )
             self._calibrations = CalibrationRepository.from_json_files(calibration_paths)
             self._loaded_calibration_paths = calibration_paths
             self._entry_by_display = {
@@ -502,20 +631,41 @@ class AnalyzerApp:
             self.binding_tree.focus(first_role)
             self._refresh_binding_table()
             self._show_selected_binding()
+            throttle_enabled = len(calibration_paths) == 2
+            self.throttle_status.set(
+                f"{SAFETY_CAL_LABEL} loaded; throttle checks are enabled."
+                if throttle_enabled
+                else f"{SAFETY_CAL_LABEL} is optional; throttle checks are disabled."
+            )
+            file_description = (
+                f"{VCS_CAL_LABEL} and {SAFETY_CAL_LABEL}"
+                if throttle_enabled
+                else VCS_CAL_LABEL
+            )
+            binding_description = (
+                "four calParam motion pairs and three throttle parameters"
+                if throttle_enabled
+                else "four calParam motion pairs"
+            )
             if all_bound:
                 self.status.set(
-                    f"Loaded {len(displays)} numeric entries from two JSON files and applied four calParam motion pairs"
+                    f"Loaded {len(displays)} numeric entries from {file_description} and applied {binding_description}"
                 )
             else:
                 self.status.set(
-                    f"Loaded {len(displays)} numeric entries from two JSON files; load or correct the calParam workbook"
+                    f"Loaded {len(displays)} numeric entries from {file_description}; load or correct the calParam workbook"
                 )
         except PrecondAbortError as exc:
             self._calibrations = None
+            self._vcs_calibrations = None
+            self._safety_calibrations = None
             self._loaded_calibration_paths = None
             self._entry_by_display = {}
             self._display_by_source = {}
             self._calibration_bindings = {}
+            self.throttle_status.set(
+                f"{SAFETY_CAL_LABEL} is optional; throttle checks are disabled."
+            )
             self.x_entry_box["values"] = ()
             self.y_entry_box["values"] = ()
             self.x_entry_selection.set("")
@@ -545,15 +695,22 @@ class AnalyzerApp:
     def _refresh_binding_table(self) -> None:
         for role, label, _ in THRESHOLD_BINDING_SPECS:
             spec = self._calibration_specs.get(role)
-            if spec is None:
+            parameter = self._calibration_bindings.get(role)
+            if parameter is not None:
+                x_name = self._entry_name(parameter.x_source) if parameter.x_source else "Constant"
+                y_name = self._entry_name(parameter.y_source)
+                status = (
+                    "Manual"
+                    if parameter.source.startswith("manual:")
+                    else "calParam" if spec is not None else "Automatic"
+                )
+                values = (label, x_name, y_name, status)
+            elif role in THROTTLE_BINDING_ROLES and len(self._selected_calibration_paths()) < 2:
+                values = (label, "SAFETY CAL", "SAFETY CAL", "Disabled")
+            elif spec is None:
                 values = (label, LOAD_CONFIG_PLACEHOLDER, LOAD_CONFIG_PLACEHOLDER, "Waiting")
             elif self._calibrations is None:
                 values = (label, spec.x_entry_name, spec.y_entry_name, "Load JSON")
-            elif role in self._calibration_bindings:
-                parameter = self._calibration_bindings[role]
-                x_name = self._entry_name(parameter.x_source) if parameter.x_source else "Constant"
-                y_name = self._entry_name(parameter.y_source)
-                values = (label, x_name, y_name, "calParam")
             else:
                 values = (label, spec.x_entry_name, spec.y_entry_name, "Missing JSON")
             self.binding_tree.item(role, values=values)
@@ -581,9 +738,17 @@ class AnalyzerApp:
                 self._display_by_source.get(y_entry.source, "") if y_entry else ""
             )
             if self._calibrations is None:
-                self.parameter_value.set("Load both calibration JSON files to enable X/Y selection.")
+                self.parameter_value.set(f"Load the mandatory {VCS_CAL_LABEL} JSON file to enable X/Y selection.")
+            elif role in THROTTLE_BINDING_ROLES and len(self._selected_calibration_paths()) < 2:
+                self.parameter_value.set(
+                    f"Load the optional {SAFETY_CAL_LABEL} JSON file to enable this throttle check."
+                )
             elif spec is None:
-                self.parameter_value.set("Load a workbook with a valid calParam tab.")
+                self.parameter_value.set(
+                    "This throttle parameter could not be resolved from the selected calibration files."
+                    if role in THROTTLE_BINDING_ROLES
+                    else "Load a workbook with a valid calParam tab."
+                )
             else:
                 self.parameter_value.set(
                     f"calParam requested X={spec.x_entry_name} and Y={spec.y_entry_name}, "
@@ -603,7 +768,7 @@ class AnalyzerApp:
             if show_error:
                 messagebox.showerror(
                     "Calibration binding",
-                    "Load both calibration JSON files first.",
+                    f"Load the mandatory {VCS_CAL_LABEL} JSON file first.",
                     parent=self.root,
                 )
             return False
@@ -668,15 +833,49 @@ class AnalyzerApp:
 
     def _bind_from_cal_param(self, show_error: bool) -> bool:
         self._calibration_bindings = {}
-        if self._calibrations is None or not self._calibration_specs:
+        if (
+            self._calibrations is None
+            or self._vcs_calibrations is None
+            or not self._calibration_specs
+        ):
             self._refresh_binding_table()
             return False
         errors: list[str] = []
         for role, spec in self._calibration_specs.items():
             try:
-                self._calibration_bindings[role] = self._calibrations.combine_spec(spec)
+                parameter = self._vcs_calibrations.combine_spec(spec)
+                if len(self._selected_calibration_paths()) == 2:
+                    parameter = with_json_provenance(
+                        parameter,
+                        self._selected_calibration_paths()[0],
+                    )
+                self._calibration_bindings[role] = parameter
             except PrecondAbortError as exc:
                 errors.append(f"{LABEL_BY_ROLE[role]}: {exc}")
+        if len(self._selected_calibration_paths()) == 2:
+            for role in THROTTLE_BINDING_ROLES:
+                requested_name = DEFAULT_PARAMETER_NAME_BY_ROLE[role]
+                resolution_errors: list[str] = []
+                for repository, json_path in (
+                    (self._safety_calibrations, self._selected_calibration_paths()[1]),
+                    (self._vcs_calibrations, self._selected_calibration_paths()[0]),
+                ):
+                    if repository is None:
+                        continue
+                    try:
+                        parameter = repository.resolve(requested_name)
+                        self._calibration_bindings[role] = with_json_provenance(
+                            parameter,
+                            json_path,
+                        )
+                        break
+                    except PrecondAbortError as exc:
+                        resolution_errors.append(str(exc))
+                else:
+                    errors.append(
+                        f"{LABEL_BY_ROLE[role]}: not found in {SAFETY_CAL_LABEL} or "
+                        f"{VCS_CAL_LABEL} ({'; '.join(resolution_errors)})"
+                    )
         self._refresh_binding_table()
         if errors and show_error:
             messagebox.showerror(
@@ -761,8 +960,7 @@ class AnalyzerApp:
 
     def _run_analysis(self) -> None:
         paths = {
-            "Calibration JSON 1": self.calibration_path_1.get(),
-            "Calibration JSON 2": self.calibration_path_2.get(),
+            VCS_CAL_LABEL: self.calibration_path_1.get(),
             "Configuration workbook": self.mapping_path.get(),
         }
         missing = [label for label, value in paths.items() if not value.strip()]
@@ -783,10 +981,13 @@ class AnalyzerApp:
             self._load_calibrations()
         if self._calibrations is None or self._loaded_calibration_paths != selected_calibration_paths:
             return
+        required_roles = MOTION_BINDING_ROLES + (
+            THROTTLE_BINDING_ROLES if len(selected_calibration_paths) == 2 else ()
+        )
         unbound = [
             label
             for role, label, _ in THRESHOLD_BINDING_SPECS
-            if role not in self._calibration_bindings
+            if role in required_roles and role not in self._calibration_bindings
         ]
         if unbound:
             messagebox.showerror(
@@ -797,6 +998,7 @@ class AnalyzerApp:
             return
         self._analysis_overrides = dict(self._calibration_bindings)
         self._analysis_calibration_paths = selected_calibration_paths
+        self._analysis_throttle_checks_enabled = len(selected_calibration_paths) == 2
         self._analysis_measurement_paths = self._measurement_paths
         self._analysis_mapping_path = paths["Configuration workbook"].strip()
         self._analysis_output_path = str(output_path)
@@ -825,6 +1027,7 @@ class AnalyzerApp:
                                 calibrations,
                                 measurement_path,
                                 parameter_overrides=self._analysis_overrides,
+                                enable_throttle_checks=self._analysis_throttle_checks_enabled,
                             )
                         )
                 except PrecondAbortError as exc:
@@ -881,7 +1084,9 @@ class AnalyzerApp:
             )
         )
         self.status.set(f"Complete — report saved to {output}")
-        self.mapping_status.set(result.mapping.warning or f"Mapping used: {result.mapping.source}")
+        throttle_mode = "Throttle checks enabled" if result.throttle_checks_enabled else "Throttle checks disabled"
+        mapping_message = result.mapping.warning or f"Mapping used: {result.mapping.source}"
+        self.mapping_status.set(f"{throttle_mode}. {mapping_message}")
 
     def _show_error(self, error: Exception) -> None:
         self.progress.stop()
@@ -896,6 +1101,7 @@ class AnalyzerApp:
 
 
 def launch() -> None:
+    enable_windows_dpi_awareness()
     root = tk.Tk()
     AnalyzerApp(root)
     root.mainloop()

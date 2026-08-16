@@ -80,6 +80,18 @@ class MappingTests(unittest.TestCase):
             config = load_mapping(self._workbook(Path(directory), omit="throttle"))
         self.assertNotIn("throttle", config.signals)
 
+    def test_supplied_windows_excel_workbook_is_complete(self):
+        workbook = Path(__file__).resolve().parents[1] / "PrecondAndAbort.xlsx"
+        if not workbook.exists():
+            self.skipTest("The supplied Windows workbook is not available")
+        mapping = load_mapping(workbook)
+        matched = match_motion_calibration_specs(
+            mapping,
+            load_calibration_specs(workbook),
+        )
+        self.assertEqual(set(matched), set(MOTION_LOGICAL_NAMES))
+        self.assertIn("throttle", mapping.signals)
+
 
 if __name__ == "__main__":
     unittest.main()

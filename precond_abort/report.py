@@ -231,6 +231,7 @@ def write_report(result: AnalysisResult, output_path: str | Path) -> Path:
         ("Generated (UTC)", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")),
         ("Abort events", len(result.events)),
         ("Warnings", "\n".join(result.warnings) if result.warnings else "None"),
+        ("Throttle checks", "Enabled" if result.throttle_checks_enabled else "Disabled"),
     ]
     for row in metadata_rows:
         metadata.append(list(row))

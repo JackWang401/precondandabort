@@ -5,15 +5,84 @@ from pathlib import Path
 from precond_abort.errors import InputValidationError
 from precond_abort.gui import (
     LOAD_CONFIG_PLACEHOLDER,
+    SAFETY_CAL_LABEL,
     THRESHOLD_BINDING_SPECS,
+    VCS_CAL_LABEL,
     analysis_output_path,
+    default_mapping_workbook,
+    default_path_state_path,
+    enable_windows_dpi_awareness,
     initial_binding_row,
     read_path_state,
+    selected_calibration_paths,
     write_path_state,
 )
 
 
 class GuiConfigurationTests(unittest.TestCase):
+    def test_calibration_file_labels_are_domain_specific(self):
+        self.assertEqual(VCS_CAL_LABEL, "VCS CAL")
+        self.assertEqual(SAFETY_CAL_LABEL, "SAFETY CAL")
+
+    def test_vcs_cal_is_required_and_safety_cal_is_optional(self):
+        self.assertEqual(selected_calibration_paths("", "/cal/safety.json"), ())
+        self.assertEqual(
+            selected_calibration_paths("/cal/vcs.json"),
+            ("/cal/vcs.json",),
+        )
+        self.assertEqual(
+            selected_calibration_paths("/cal/vcs.json", "/cal/safety.json"),
+            ("/cal/vcs.json", "/cal/safety.json"),
+        )
+
+    def test_windows_state_is_saved_under_local_app_data(self):
+        path = default_path_state_path(
+            platform_name="nt",
+            environment={"LOCALAPPDATA": "/windows/LocalAppData"},
+        )
+        self.assertEqual(
+            path,
+            Path("/windows/LocalAppData/PrecondAbortAnalyzer/state.json"),
+        )
+
+    def test_windows_state_path_has_a_home_directory_fallback(self):
+        path = default_path_state_path(
+            platform_name="nt",
+            environment={},
+            home_directory="/windows/User",
+        )
+        self.assertEqual(
+            path,
+            Path("/windows/User/AppData/Local/PrecondAbortAnalyzer/state.json"),
+        )
+
+    def test_windows_prefers_excel_mapping_workbook(self):
+        with tempfile.TemporaryDirectory() as first_directory, tempfile.TemporaryDirectory() as second_directory:
+            first_root = Path(first_directory)
+            second_root = Path(second_directory)
+            numbers = first_root / "PrecondAndAbort.numbers"
+            excel = second_root / "PrecondAndAbort.xlsx"
+            numbers.touch()
+            excel.touch()
+
+            self.assertEqual(
+                default_mapping_workbook(
+                    (first_root, second_root),
+                    platform_name="nt",
+                ),
+                excel.resolve(),
+            )
+            self.assertEqual(
+                default_mapping_workbook(
+                    (first_root, second_root),
+                    platform_name="posix",
+                ),
+                numbers.resolve(),
+            )
+
+    def test_windows_dpi_helper_is_a_noop_on_other_platforms(self):
+        self.assertFalse(enable_windows_dpi_awareness(platform_name="posix"))
+
     def test_all_calibratables_have_placeholder_rows(self):
         roles = [role for role, _, _ in THRESHOLD_BINDING_SPECS]
         self.assertEqual(
@@ -23,6 +92,9 @@ class GuiConfigurationTests(unittest.TestCase):
                 "steering_wheel_angle_rate",
                 "yaw_rate",
                 "lateral_acceleration",
+                "throttle_increase",
+                "throttle_override",
+                "throttle_max",
             ],
         )
         self.assertTrue(LOAD_CONFIG_PLACEHOLDER)

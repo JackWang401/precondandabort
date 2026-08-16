@@ -33,9 +33,14 @@ ANALYSIS_LOGICAL_NAMES = (
     *MOTION_LOGICAL_NAMES,
     "abort_any_active_event",
 )
+THROTTLE_LOGICAL_NAMES = ("throttle", "aeb_deceleration_request")
+THROTTLE_PARAMETER_DEFAULTS = {
+    "throttle_increase": "PedalPosProIncrease_Th",
+    "throttle_override": "PedalPosPro_Override",
+    "throttle_max": "PedalPosPro_th",
+}
 THROTTLE_DISABLED_WARNING = (
-    "Throttle checks are temporarily disabled because the calParam worksheet does not "
-    "provide the complete throttle parameter set."
+    "Throttle checks are disabled because no SAFETY CAL JSON file was selected."
 )
 
 
@@ -50,14 +55,19 @@ class AbortAnalyzer:
         calibrations: CalibrationRepository,
         input_file: str | Path,
         parameter_overrides: Mapping[str, CalibrationParameter] | None = None,
+        enable_throttle_checks: bool = False,
     ) -> AnalysisResult:
-        requested = [mapping.signal(name).model_logger for name in ANALYSIS_LOGICAL_NAMES]
+        logical_names = ANALYSIS_LOGICAL_NAMES + (
+            THROTTLE_LOGICAL_NAMES if enable_throttle_checks else ()
+        )
+        self._validate_mapping(mapping, logical_names, enable_throttle_checks)
+        requested = [mapping.signal(name).model_logger for name in logical_names]
         by_requested_name = source.read_many(requested)
         signals = {
             logical_name: by_requested_name[mapping.signal(logical_name).model_logger]
-            for logical_name in ANALYSIS_LOGICAL_NAMES
+            for logical_name in logical_names
         }
-        parameter_names = self._parameter_names(mapping)
+        parameter_names = self._parameter_names(mapping, enable_throttle_checks)
         overrides = parameter_overrides or {}
         automatically_resolved = calibrations.resolve_many(
             requested_name
@@ -80,11 +90,18 @@ class AbortAnalyzer:
                 filename=Path(input_file).name,
                 signals=signals,
                 parameters=parameters,
-                parameter_names=parameter_names,
+                enable_throttle_checks=enable_throttle_checks,
             )
             for index in rising_indices
         )
-        warnings = tuple(item for item in (mapping.warning, THROTTLE_DISABLED_WARNING) if item)
+        warnings = tuple(
+            item
+            for item in (
+                mapping.warning,
+                None if enable_throttle_checks else THROTTLE_DISABLED_WARNING,
+            )
+            if item
+        )
         used_parameters = {
             requested_name: parameters[role]
             for role, requested_name in parameter_names.items()
@@ -96,13 +113,58 @@ class AbortAnalyzer:
             parameters=used_parameters,
             input_files=(Path(input_file),),
             warnings=warnings,
+            throttle_checks_enabled=enable_throttle_checks,
         )
 
-    def _parameter_names(self, mapping: MappingConfiguration) -> dict[str, str]:
+    def _validate_mapping(
+        self,
+        mapping: MappingConfiguration,
+        logical_names: tuple[str, ...],
+        enable_throttle_checks: bool,
+    ) -> None:
+        missing = [
+            logical_name
+            for logical_name in logical_names
+            if logical_name not in mapping.signals
+            or not mapping.signals[logical_name].model_logger
+        ]
+        if missing:
+            mode = "Throttle checks require" if enable_throttle_checks else "Analysis requires"
+            raise InputValidationError(
+                f"{mode} these swIntfc signal mappings:\n- " + "\n- ".join(missing)
+            )
+
+    def _parameter_names(
+        self,
+        mapping: MappingConfiguration,
+        enable_throttle_checks: bool,
+    ) -> dict[str, str]:
         names: dict[str, str] = {}
         for _, logical_name, default_name in MOTION_RULES:
             configured = mapping.signal(logical_name).calibrations
             names[logical_name] = configured[0] if configured else default_name
+        if enable_throttle_checks:
+            configured = mapping.signal("throttle").calibrations
+            by_role: dict[str, str] = {}
+            for name in configured:
+                token = "".join(character.lower() for character in name if character.isalnum())
+                if "increase" in token:
+                    by_role["throttle_increase"] = name
+                elif "override" in token:
+                    by_role["throttle_override"] = name
+                elif token == "pedalposproth":
+                    by_role["throttle_max"] = name
+            missing = [
+                default_name
+                for role, default_name in THROTTLE_PARAMETER_DEFAULTS.items()
+                if role not in by_role
+            ]
+            if missing:
+                raise InputValidationError(
+                    "Throttle checks require the throttle row in swIntfc cal_thd to list:\n- "
+                    + "\n- ".join(missing)
+                )
+            names.update(by_role)
         return names
 
     def _analyse_event(
@@ -111,7 +173,7 @@ class AbortAnalyzer:
         filename: str,
         signals: Mapping[str, SignalSeries],
         parameters: Mapping[str, CalibrationParameter],
-        parameter_names: Mapping[str, str],
+        enable_throttle_checks: bool,
     ) -> AbortEvent:
         speed = signals["vehicle_speed"].value_at(timestamp)
         values = {
@@ -134,6 +196,30 @@ class AbortAnalyzer:
             thresholds[logical_name] = threshold
             flags[output_name] = abs(values[logical_name]) >= threshold
 
+        throttle_baseline = None
+        throttle_increase = None
+        deceleration_start = None
+        if enable_throttle_checks:
+            throttle = values["throttle"]
+            thresholds.update(
+                {
+                    role: parameters[role].value_at(speed)
+                    for role in THROTTLE_PARAMETER_DEFAULTS
+                }
+            )
+            deceleration_start = self._deceleration_start_at(
+                timestamp,
+                signals["aeb_deceleration_request"],
+            )
+            if deceleration_start is not None:
+                throttle_baseline = signals["throttle"].value_at(deceleration_start)
+                throttle_increase = throttle - throttle_baseline
+                flags["throttleInc"] = (
+                    throttle >= thresholds["throttle_override"]
+                    and throttle_increase >= thresholds["throttle_increase"]
+                )
+            flags["maxThrottle"] = throttle >= thresholds["throttle_max"]
+
         flags["others"] = not any(value for name, value in flags.items() if name != "others")
 
         return AbortEvent(
@@ -143,10 +229,36 @@ class AbortAnalyzer:
             signal_values=values,
             thresholds=thresholds,
             vehicle_speed=speed,
-            throttle_baseline=None,
-            throttle_increase=None,
-            deceleration_start=None,
+            throttle_baseline=throttle_baseline,
+            throttle_increase=throttle_increase,
+            deceleration_start=deceleration_start,
         )
+
+    def _deceleration_start_at(
+        self,
+        timestamp: float,
+        request: SignalSeries,
+    ) -> float | None:
+        """Return the active/recent AEB intervention start for an abort event."""
+
+        intervention = np.isclose(request.samples, -6.0) | np.isclose(
+            request.samples,
+            -15.0,
+        )
+        start_indices = np.flatnonzero(intervention & np.r_[True, ~intervention[:-1]])
+        for start_index in reversed(start_indices):
+            start_time = float(request.timestamps[start_index])
+            if start_time > timestamp:
+                continue
+            following_inactive = np.flatnonzero(~intervention[start_index + 1 :])
+            if len(following_inactive) == 0:
+                return start_time
+            end_index = start_index + 1 + int(following_inactive[0])
+            end_time = float(request.timestamps[end_index])
+            if timestamp <= end_time + self.deceleration_end_tolerance_seconds:
+                return start_time
+            return None
+        return None
 
 
 def combine_analysis_results(results: tuple[AnalysisResult, ...]) -> AnalysisResult:
@@ -155,6 +267,13 @@ def combine_analysis_results(results: tuple[AnalysisResult, ...]) -> AnalysisRes
     if not results:
         raise InputValidationError("Select at least one MDF/MF4 measurement file")
     first = results[0]
+    if any(
+        result.throttle_checks_enabled != first.throttle_checks_enabled
+        for result in results[1:]
+    ):
+        raise InputValidationError(
+            "All measurements in a batch must use the same throttle-check mode"
+        )
     return AnalysisResult(
         input_file=first.input_file,
         input_files=tuple(
@@ -168,4 +287,5 @@ def combine_analysis_results(results: tuple[AnalysisResult, ...]) -> AnalysisRes
         warnings=tuple(
             dict.fromkeys(warning for result in results for warning in result.warnings)
         ),
+        throttle_checks_enabled=first.throttle_checks_enabled,
     )

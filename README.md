@@ -1,27 +1,56 @@
 # Precondition & Abort Analyzer
 
-A local desktop HMI and command-line tool for classifying AEB abort events in MDF/MF4 measurements. The analyzer reads `swIntfc` and `calParam` directly from an Apple Numbers or Excel configuration workbook, retrieves the specified speed-dependent thresholds from JSON, identifies abort-event rising edges, and creates an auditable Excel report.
+A Windows 11-compatible desktop HMI and command-line tool for classifying AEB abort events in MDF/MF4 measurements. The analyzer reads `swIntfc` and `calParam` from an Excel or Apple Numbers configuration workbook, retrieves the specified speed-dependent thresholds from JSON, identifies abort-event rising edges, and creates an auditable Excel report.
 
 ## What is implemented
 
 - Direct `.numbers`, `.xlsx`, and `.xlsm` reading for `swIntfc` and `calParam`
-- Combined calibration lookup across two user-selected JSON files, with automatic X/Y binding from `calParam` and optional manual override
+- Calibration lookup from a required VCS CAL JSON and an optional SAFETY CAL JSON, with automatic X/Y binding and optional manual override
 - Linear threshold interpolation with endpoint clamping
 - A desktop HMI with two JSON selectors, multi-file MDF/MF4 selection, calibration curve visualization, live interpolation, progress, and event preview
 - Case-insensitive `swIntfc` signal mapping with documented acronym aliases
 - A warning-backed built-in mapping when the supplied workbook has no `swIntfc` sheet
 - MDF/MF4 reading through `asammdf`
-- Motion and `others` classification; throttle checks are temporarily disabled
+- Motion and `others` classification, with throttle checks enabled whenever SAFETY CAL is supplied
 - A formatted Excel report with two-level `actual / thd / result` comparison groups, plus event, mapping, parameter, and run-detail sheets
 - A CLI for repeatable single-file execution
+- Windows 11 launch scripts, per-user settings under `%LOCALAPPDATA%`, high-DPI support, and standalone executable packaging
 
-## Installation
+## Windows 11 quick start
+
+The deployment scripts use 64-bit Python 3.12 from python.org. The standard installer must include the Python launcher, `pip`, and Tcl/Tk. Copy or clone the complete project folder to the Windows computer, then:
+
+1. Double-click `setup_windows.bat` once. It creates `.venv` and installs the required packages.
+2. Double-click `run_windows.bat` whenever you want to start the HMI.
+
+The launcher works from paths containing spaces. The application stores remembered paths in `%LOCALAPPDATA%\PrecondAbortAnalyzer\state.json`, so its installation folder may be read-only. On Windows, the bundled `PrecondAndAbort.xlsx` workbook is preferred automatically; `.numbers` files remain supported without requiring the Apple Numbers application.
+
+## Standalone Windows deployment
+
+To deploy the application to Windows 11 computers that do not have Python installed, build it on a Windows 11 machine:
+
+1. Run `setup_windows.bat`.
+2. Run `build_windows.bat`.
+3. Distribute the entire `dist\PrecondAbortAnalyzer` folder.
+4. Start the deployed application with `PrecondAbortAnalyzer.exe`.
+
+The build is folder-based, so do not copy the `.exe` by itself. The generated executable is unsigned; sign it with your organization's code-signing certificate before broad managed deployment if required by your Windows security policy.
+
+## Manual development installation
 
 Python 3.10 or newer is required. The desktop HMI also requires a Python build with Tk support.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+Windows PowerShell equivalent:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
 ```
 
@@ -32,15 +61,17 @@ source .venv/bin/activate
 python run_app.py
 ```
 
-When the HMI starts, the four active motion calibratables are visible as placeholder rows, and file-navigation dialogs prompt you to locate two calibration JSON files. The application does not assume that either file is in the repository or another fixed location. If a dialog is cancelled, use the separate **Browse** control beside **Calibration JSON 1** or **Calibration JSON 2** when you are ready.
+On Windows, use `run_windows.bat` or run `.\.venv\Scripts\python.exe run_app.py` from PowerShell.
 
-The application combines the numeric entries from both JSON files and labels each source with its originating filename. It then reads each motion parameter and its X/Y entry names from the configuration workbook's `calParam` tab. X and Y may come from different JSON files. Matching pairs are retrieved automatically and marked **calParam** in the HMI. Select a row to preview its curve and interpolated threshold. You can still choose different entries and select **Use selected X/Y** to override that row. Use `constant — no X axis` when the selected Y entry is scalar or all of its values are equal.
+When the HMI starts, all motion and throttle calibratables are visible as placeholder rows. If no previous selection is available, a file-navigation dialog prompts you to locate the required **VCS CAL** JSON file. **SAFETY CAL** is optional and has its own **Browse** control. The application does not assume that either file is in the repository or another fixed location.
+
+The application discovers numeric entries in VCS CAL. When SAFETY CAL is selected, it combines entries from both files, labels each source with its originating filename, and enables throttle checks. It reads each motion parameter and its X/Y entry names from the configuration workbook's `calParam` tab. Throttle parameters are resolved from the names listed in the throttle row of `swIntfc`. Select any calibratable row to preview its curve or constant value. You can choose different entries and select **Use selected X/Y** to override the automatic binding. Use `constant — no X axis` when the selected Y entry is scalar or all of its values are equal.
 
 The **Measurement MDF/MF4 files** selector accepts one or more files in a single selection. Every selected file is analyzed with the same mapping and calibration bindings, and all events are written to one Excel report. The HMI preview and report retain the originating filename for each event. The report path is generated automatically in the measurement folder: `<measurement>_abort_analysis.xlsx` for one file or `combined_<count>_files_abort_analysis.xlsx` for a batch. Batch inputs must be in the same folder.
 
-The HMI remembers both JSON files, every selected MDF/MF4 file, and the configuration workbook between launches. The output-report path is recalculated from the restored measurement location. These selections are stored locally in the ignored `.precond_abort_state.json` file beside `run_app.py`; they are restored before repository sample paths are considered.
+The HMI remembers the required and optional JSON files, every selected MDF/MF4 file, and the configuration workbook between launches. The output-report path is recalculated from the restored measurement location. On Windows, these selections are stored in `%LOCALAPPDATA%\PrecondAbortAnalyzer\state.json`. In a source checkout on other platforms, they remain in the ignored `.precond_abort_state.json` file beside `run_app.py`. Restored paths are considered before repository sample paths.
 
-The analyzer currently uses bindings for steering-wheel angle, steering-wheel-angle speed, yaw rate, and lateral acceleration. Pair validation rejects mismatched point counts and duplicate X values before the analysis starts. Throttle signals and parameters are not required until the missing throttle parameter has been added to `calParam`.
+Pair validation rejects mismatched point counts and duplicate X values before the analysis starts. With only VCS CAL selected, throttle signals and parameters are not required. Selecting SAFETY CAL makes the throttle and AEB-deceleration-request signals, along with all three throttle parameters, mandatory for that run.
 
 ## Run from the command line
 
@@ -68,7 +99,14 @@ The software searches the workbook for tabs named `swIntfc` and `calParam` witho
 | lateralAcceleration | rov/lateralAcceleration | LateralAcceleration_th |
 | abort_any_active_event | settingsRequest/AEB/abortAnyActiveEvents | |
 
-Throttle and deceleration-request rows may remain in `swIntfc`, but they are optional while throttle checking is disabled.
+The following rows are required when SAFETY CAL is selected:
+
+| acronym | modelLogger | cal_thd |
+| --- | --- | --- |
+| throttle | rov/PedalPosPro | PedalPosProIncrease_Th; PedalPosPro_Override; PedalPosPro_th |
+| aeb_deceleration_request | ndas_di_status/activeSafety/outputs/AEB/accelerationRequest | |
+
+They are optional when SAFETY CAL is absent.
 
 The active `calParam` rows are:
 
@@ -85,26 +123,34 @@ Create a clean template with:
 python -m precond_abort.cli mapping-template mapping_template.xlsx
 ```
 
-The supplied `PrecondAndAbort.numbers` file is read directly; no Excel export is required. Its `swIntfc` tab uses the corrected MDF channels `rov/lateralAcceleration` and `rov/YawrateSuspension`. For compatibility with older workbooks, the former misspellings `rov/lateralAccceleration` and `rov/YawrateSuppression` are still accepted with a visible warning. A workbook that contains `swIntfc` is otherwise validated strictly.
+The supplied `PrecondAndAbort.xlsx` file is the default on Windows 11. `PrecondAndAbort.numbers` can also be read directly without Apple Numbers. The `swIntfc` tab uses the corrected MDF channels `rov/lateralAcceleration` and `rov/YawrateSuspension`. For compatibility with older workbooks, the former misspellings `rov/lateralAccceleration` and `rov/YawrateSuppression` are still accepted with a visible warning. A workbook that contains `swIntfc` is otherwise validated strictly.
 
 ## Analysis behavior
 
 - One event is created for every `0 -> 1` transition of `abort_any_active_event`.
 - Signal values use the latest available sample at or before the event timestamp.
 - Signed motion signals are compared by magnitude against positive, speed-interpolated thresholds.
-- Throttle signals and thresholds are not loaded or evaluated in this version.
-- `throttleInc` and `maxThrottle` remain `No`.
-- `others` is set when none of the four motion reasons is active.
+- Without SAFETY CAL, throttle signals and thresholds are not loaded; `throttleInc` and `maxThrottle` remain `No`.
+- With SAFETY CAL, throttle checks use `PedalPosProIncrease_Th`, `PedalPosPro_Override`, and `PedalPosPro_th`. The documented `LSB_Throttle_Override_Increase` and `LSB_Min_Throttle_Override` JSON aliases are accepted.
+- An AEB deceleration request of `-6` or `-15` starts the throttle-increase baseline. The baseline remains applicable while the request is active and for 0.5 seconds after it ends.
+- `throttleInc` is `Yes` when the current pedal position reaches the override threshold and its increase from the baseline reaches the increase threshold. `maxThrottle` is `Yes` when the pedal position reaches the speed-dependent maximum threshold.
+- `others` is set when none of the applicable motion or throttle reasons is active.
 
 ## Excel output layout
 
 The primary `Abort Analysis` worksheet uses a two-row header. `File Name`, `timestamp`, and `speed` are followed by grouped `actual`, `thd`, and `result` columns for steering-wheel angle, steering-wheel-angle speed, yaw rate, lateral acceleration, throttle increase, and maximum throttle. `others` is the final result-only column.
 
-Motion `actual` values are the magnitudes used for threshold comparison. Signed measurements and other audit values remain available in `Event Details`. While throttle checking is disabled, throttle `actual` and `thd` cells remain blank and their results remain `No`.
+Motion `actual` values are the magnitudes used for threshold comparison. Signed measurements and other audit values remain available in `Event Details`. When SAFETY CAL is absent, throttle `actual` and `thd` cells remain blank and their results remain `No`. When it is present, those columns contain the calculated throttle values, thresholds, and results.
 
 ## Tests
 
 ```bash
 source .venv/bin/activate
 python -m unittest discover -s tests -v
+```
+
+Windows command prompt equivalent:
+
+```bat
+.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```

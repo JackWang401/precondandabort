@@ -130,6 +130,7 @@ class AnalysisResult:
     parameters: Mapping[str, CalibrationParameter]
     input_files: tuple[Path, ...] = field(default_factory=tuple)
     warnings: tuple[str, ...] = field(default_factory=tuple)
+    throttle_checks_enabled: bool = False
 
     @property
     def source_files(self) -> tuple[Path, ...]:

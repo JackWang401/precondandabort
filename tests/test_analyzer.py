@@ -73,7 +73,7 @@ class AbortAnalyzerTests(unittest.TestCase):
         self.assertFalse(result.events[1].flags["throttleInc"])
         self.assertFalse(result.events[1].flags["maxThrottle"])
         self.assertTrue(result.events[2].flags["others"])
-        self.assertIn("Throttle checks are temporarily disabled", result.warnings[-1])
+        self.assertIn("Throttle checks are disabled", result.warnings[-1])
 
     def test_throttle_signals_and_parameters_are_not_required(self):
         result = AbortAnalyzer().analyze(
@@ -84,6 +84,52 @@ class AbortAnalyzerTests(unittest.TestCase):
         self.assertFalse(second.flags["throttleInc"])
         self.assertNotIn("throttle", second.signal_values)
         self.assertNotIn("throttle_max", second.thresholds)
+
+    def test_safety_cal_mode_enables_throttle_checks(self):
+        result = AbortAnalyzer().analyze(
+            self._source(),
+            self.mapping,
+            self.calibrations,
+            "input.mf4",
+            enable_throttle_checks=True,
+        )
+
+        second = result.events[1]
+        self.assertTrue(result.throttle_checks_enabled)
+        self.assertEqual(second.deceleration_start, 3)
+        self.assertEqual(second.throttle_baseline, 10)
+        self.assertEqual(second.throttle_increase, 60)
+        self.assertEqual(second.thresholds["throttle_increase"], 20)
+        self.assertEqual(second.thresholds["throttle_override"], 50)
+        self.assertEqual(second.thresholds["throttle_max"], 85)
+        self.assertTrue(second.flags["throttleInc"])
+        self.assertFalse(second.flags["maxThrottle"])
+        self.assertFalse(second.flags["others"])
+        self.assertNotIn("Throttle checks are disabled", "\n".join(result.warnings))
+
+        third = result.events[2]
+        self.assertIsNone(third.deceleration_start)
+        self.assertIsNone(third.throttle_baseline)
+        self.assertIsNone(third.throttle_increase)
+        self.assertTrue(third.flags["others"])
+
+    def test_enabled_max_throttle_check_uses_speed_threshold(self):
+        source = self._source()
+        throttle_name = self.mapping.signal("throttle").model_logger
+        source.series[throttle_name] = series(
+            [0, 1, 2, 3, 4, 5, 6],
+            [0, 0, 0, 10, 90, 90, 1],
+        )
+        result = AbortAnalyzer().analyze(
+            source,
+            self.mapping,
+            self.calibrations,
+            "input.mf4",
+            enable_throttle_checks=True,
+        )
+
+        self.assertTrue(result.events[1].flags["maxThrottle"])
+        self.assertEqual(result.events[1].signal_values["throttle"], 90)
 
     def test_explicit_parameter_binding_overrides_default_parameter(self):
         override = CalibrationParameter(

@@ -7,6 +7,9 @@ __pycache__/
 .mypy_cache/
 .coverage
 htmlcov/
+build/
+dist/
+*.spec
 outputs/
 .precond_abort_state.json
 .precond_abort_state.json.tmp

@@ -20,7 +20,15 @@ DEFAULT_SIGNAL_ROWS = (
     ),
     SignalMapping("yaw_rate", "rov/YawrateSuspension", ("YawrateSuspension_Th",)),
     SignalMapping("lateral_acceleration", "rov/lateralAcceleration", ("LateralAcceleration_th",)),
-    SignalMapping("throttle", "rov/PedalPosPro", ("PedalPosPro_th",)),
+    SignalMapping(
+        "throttle",
+        "rov/PedalPosPro",
+        (
+            "PedalPosProIncrease_Th",
+            "PedalPosPro_Override",
+            "PedalPosPro_th",
+        ),
+    ),
     SignalMapping("abort_any_active_event", "settingsRequest/AEB/abortAnyActiveEvents"),
     SignalMapping(
         "aeb_deceleration_request",

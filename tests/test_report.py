@@ -50,6 +50,30 @@ class ReportTests(unittest.TestCase):
             parameter_headers = [cell.value for cell in workbook["Parameters"][1]]
             self.assertEqual(parameter_headers[2:4], ["X Source", "Y Source"])
             self.assertEqual(workbook["Run Information"]["B5"].value, 3)
+            self.assertEqual(workbook["Run Information"]["B7"].value, "Disabled")
+            workbook.close()
+
+    def test_report_records_enabled_throttle_mode_and_values(self):
+        fixture = analyzer_fixtures.AbortAnalyzerTests()
+        fixture.setUp()
+        result = AbortAnalyzer().analyze(
+            fixture._source(),
+            fixture.mapping,
+            fixture.calibrations,
+            "input.mf4",
+            enable_throttle_checks=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_report(result, Path(directory) / "report.xlsx")
+            workbook = load_workbook(path, data_only=False)
+            analysis = workbook["Abort Analysis"]
+            self.assertEqual(analysis["P4"].value, 60)
+            self.assertEqual(analysis["Q4"].value, 20)
+            self.assertEqual(analysis["R4"].value, "Yes")
+            self.assertEqual(analysis["S4"].value, 70)
+            self.assertEqual(analysis["T4"].value, 85)
+            self.assertEqual(analysis["U4"].value, "No")
+            self.assertEqual(workbook["Run Information"]["B7"].value, "Enabled")
             workbook.close()
 
     def test_report_lists_every_input_measurement(self):
