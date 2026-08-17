@@ -5,7 +5,6 @@ import os
 import queue
 import sys
 import threading
-from dataclasses import replace
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -13,7 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from .analyzer import AbortAnalyzer, combine_analysis_results
 from .calibration import CalibrationRepository
 from .errors import InputValidationError, PrecondAbortError
-from .mapping import load_calibration_specs, load_mapping, match_motion_calibration_specs
+from .mapping import load_calibration_specs, load_mapping, match_calibration_specs
 from .mdf_reader import MDFSignalSource
 from .models import AnalysisResult, CalibrationBindingSpec, CalibrationParameter
 from .report import OUTPUT_PREVIEW_HEADERS, OUTPUT_REASON_FLAGS, write_report
@@ -136,25 +135,6 @@ def selected_calibration_paths(vcs_cal: str, safety_cal: str = "") -> tuple[str,
     return tuple(paths)
 
 
-def with_json_provenance(
-    parameter: CalibrationParameter,
-    json_path: str | Path,
-) -> CalibrationParameter:
-    """Add the selected JSON filename to an automatically resolved binding."""
-
-    label = Path(json_path).name
-
-    def scoped(source: str) -> str:
-        return f"{label}::{source}" if source else ""
-
-    return replace(
-        parameter,
-        source=f"{parameter.source} [{label}]",
-        x_source=scoped(parameter.x_source),
-        y_source=scoped(parameter.y_source),
-    )
-
-
 def analysis_output_path(measurement_paths: tuple[str, ...]) -> Path:
     if not measurement_paths:
         raise InputValidationError("Select at least one MDF/MF4 measurement file")
@@ -243,8 +223,6 @@ class AnalyzerApp:
         )
         self.parameter_value = tk.StringVar(value="Select a calibration parameter")
         self._calibrations: CalibrationRepository | None = None
-        self._vcs_calibrations: CalibrationRepository | None = None
-        self._safety_calibrations: CalibrationRepository | None = None
         self._loaded_calibration_paths: tuple[str, ...] | None = None
         self._measurement_paths: tuple[str, ...] = ()
         self._entry_by_display = {}
@@ -603,14 +581,6 @@ class AnalyzerApp:
             calibration_paths = self._selected_calibration_paths()
             if not calibration_paths:
                 raise InputValidationError(f"Select the mandatory {VCS_CAL_LABEL} JSON file")
-            self._vcs_calibrations = CalibrationRepository.from_json(
-                calibration_paths[0]
-            )
-            self._safety_calibrations = (
-                CalibrationRepository.from_json(calibration_paths[1])
-                if len(calibration_paths) == 2
-                else None
-            )
             self._calibrations = CalibrationRepository.from_json_files(calibration_paths)
             self._loaded_calibration_paths = calibration_paths
             self._entry_by_display = {
@@ -657,8 +627,6 @@ class AnalyzerApp:
                 )
         except PrecondAbortError as exc:
             self._calibrations = None
-            self._vcs_calibrations = None
-            self._safety_calibrations = None
             self._loaded_calibration_paths = None
             self._entry_by_display = {}
             self._display_by_source = {}
@@ -818,12 +786,16 @@ class AnalyzerApp:
         try:
             mapping = load_mapping(self.mapping_path.get())
             specs = load_calibration_specs(self.mapping_path.get())
-            self._calibration_specs = match_motion_calibration_specs(mapping, specs)
+            self._calibration_specs = match_calibration_specs(
+                mapping,
+                specs,
+                require_throttle=len(self._selected_calibration_paths()) == 2,
+            )
             if self._calibrations is not None:
                 self._bind_from_cal_param(show_error=True)
             self._refresh_binding_table()
             self._show_selected_binding()
-            prefix = f"Mapping and {len(self._calibration_specs)} motion pairs ready"
+            prefix = f"Mapping and {len(self._calibration_specs)} calParam pairs ready"
             self.mapping_status.set(f"{prefix}. {mapping.warning}" if mapping.warning else prefix)
         except PrecondAbortError as exc:
             self._calibration_specs = {}
@@ -835,47 +807,28 @@ class AnalyzerApp:
         self._calibration_bindings = {}
         if (
             self._calibrations is None
-            or self._vcs_calibrations is None
             or not self._calibration_specs
         ):
             self._refresh_binding_table()
             return False
         errors: list[str] = []
-        for role, spec in self._calibration_specs.items():
+        active_roles = MOTION_BINDING_ROLES + (
+            THROTTLE_BINDING_ROLES
+            if len(self._selected_calibration_paths()) == 2
+            else ()
+        )
+        for role in active_roles:
+            spec = self._calibration_specs.get(role)
+            if spec is None:
+                errors.append(
+                    f"{LABEL_BY_ROLE[role]}: missing "
+                    f"{DEFAULT_PARAMETER_NAME_BY_ROLE[role]} row in calParam"
+                )
+                continue
             try:
-                parameter = self._vcs_calibrations.combine_spec(spec)
-                if len(self._selected_calibration_paths()) == 2:
-                    parameter = with_json_provenance(
-                        parameter,
-                        self._selected_calibration_paths()[0],
-                    )
-                self._calibration_bindings[role] = parameter
+                self._calibration_bindings[role] = self._calibrations.combine_spec(spec)
             except PrecondAbortError as exc:
                 errors.append(f"{LABEL_BY_ROLE[role]}: {exc}")
-        if len(self._selected_calibration_paths()) == 2:
-            for role in THROTTLE_BINDING_ROLES:
-                requested_name = DEFAULT_PARAMETER_NAME_BY_ROLE[role]
-                resolution_errors: list[str] = []
-                for repository, json_path in (
-                    (self._safety_calibrations, self._selected_calibration_paths()[1]),
-                    (self._vcs_calibrations, self._selected_calibration_paths()[0]),
-                ):
-                    if repository is None:
-                        continue
-                    try:
-                        parameter = repository.resolve(requested_name)
-                        self._calibration_bindings[role] = with_json_provenance(
-                            parameter,
-                            json_path,
-                        )
-                        break
-                    except PrecondAbortError as exc:
-                        resolution_errors.append(str(exc))
-                else:
-                    errors.append(
-                        f"{LABEL_BY_ROLE[role]}: not found in {SAFETY_CAL_LABEL} or "
-                        f"{VCS_CAL_LABEL} ({'; '.join(resolution_errors)})"
-                    )
         self._refresh_binding_table()
         if errors and show_error:
             messagebox.showerror(

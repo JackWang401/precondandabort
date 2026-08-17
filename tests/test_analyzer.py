@@ -131,6 +131,48 @@ class AbortAnalyzerTests(unittest.TestCase):
         self.assertTrue(result.events[1].flags["maxThrottle"])
         self.assertEqual(result.events[1].signal_values["throttle"], 90)
 
+    def test_throttle_checks_use_strict_above_threshold_comparisons(self):
+        source = self._source()
+        throttle_name = self.mapping.signal("throttle").model_logger
+        source.series[throttle_name] = series(
+            [0, 1, 2, 3, 4, 5, 6],
+            [0, 0, 0, 65, 85, 85, 1],
+        )
+        result = AbortAnalyzer().analyze(
+            source,
+            self.mapping,
+            self.calibrations,
+            "input.mf4",
+            enable_throttle_checks=True,
+        )
+
+        event = result.events[1]
+        self.assertEqual(event.throttle_increase, 20)
+        self.assertFalse(event.flags["throttleInc"])
+        self.assertFalse(event.flags["maxThrottle"])
+        self.assertTrue(event.flags["others"])
+
+    def test_absolute_throttle_can_activate_the_or_condition(self):
+        source = self._source()
+        throttle_name = self.mapping.signal("throttle").model_logger
+        source.series[throttle_name] = series(
+            [0, 1, 2, 3, 4, 5, 6],
+            [0, 0, 0, -10, -90, -90, 1],
+        )
+        result = AbortAnalyzer().analyze(
+            source,
+            self.mapping,
+            self.calibrations,
+            "input.mf4",
+            enable_throttle_checks=True,
+        )
+
+        event = result.events[1]
+        self.assertFalse(event.flags["throttleInc"])
+        self.assertTrue(event.flags["maxThrottle"])
+        self.assertFalse(event.flags["others"])
+        self.assertEqual(event.output_row()[18], 90)
+
     def test_explicit_parameter_binding_overrides_default_parameter(self):
         override = CalibrationParameter(
             name="UserSelectedAngleThreshold",

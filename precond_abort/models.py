@@ -115,7 +115,11 @@ class AbortEvent:
             self.throttle_increase,
             self.thresholds.get("throttle_increase"),
             yes_no("throttleInc"),
-            self.signal_values.get("throttle"),
+            (
+                abs(self.signal_values["throttle"])
+                if "throttle" in self.signal_values
+                else None
+            ),
             self.thresholds.get("throttle_max"),
             yes_no("maxThrottle"),
             yes_no("others"),

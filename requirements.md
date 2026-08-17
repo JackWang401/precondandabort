@@ -11,8 +11,8 @@
 2. The HMI shall not assume that either calibration JSON file is stored in a fixed location. When the HMI starts without a restored `VCS CAL` path, it shall open a file-navigation dialog that allows the user to locate that required file. Separate `Browse` controls shall remain available for `VCS CAL` and `SAFETY CAL`.
 3. Before `VCS CAL` is loaded, the HMI shall display placeholder rows for the four motion calibratables and the three throttle calibratables: throttle increase, throttle override, and maximum throttle.
 4. After `VCS CAL` is loaded, the software shall discover every numeric JSON entry that can be used as calibration data. If `SAFETY CAL` is also loaded, the software shall combine the entries from both files while retaining each entry's originating filename.
-5. The `calParam` tab in the configuration workbook shall supply the parameter name and the exact JSON entry names to use as X and Y for each motion calibratable.
-6. After the configuration workbook and `VCS CAL` are loaded, the HMI shall automatically retrieve and bind each motion X/Y pair specified by `calParam`. When `SAFETY CAL` is present, X and Y may originate from different selected JSON files. The HMI shall continue to allow the user to select a different X or Y entry explicitly.
+5. The `calParam` tab in the configuration workbook shall supply the parameter name and the exact JSON entry names to use as X and Y for every active motion or throttle calibratable.
+6. After the configuration workbook and calibration JSON files are loaded, the HMI shall automatically retrieve and bind each applicable X/Y pair specified by `calParam`. When `SAFETY CAL` is present, X and Y may originate from different selected JSON files. The HMI shall continue to allow the user to select a different X or Y entry explicitly.
 7. The HMI shall provide a `constant — no X axis` option for scalar Y entries and arrays whose Y values are all equal.
 8. Before accepting a selected pair, the software shall verify that X and Y contain the same number of numeric values and that X contains no duplicate values.
 9. The analyzer shall use the accepted X/Y binding for its specific calibratable. It shall not silently replace an HMI selection with a predefined parameter.
@@ -43,13 +43,13 @@
 ## 3. Calibration thresholds
 
 1. The `calParam` tab shall contain one row per parameter and the columns `x` and `y`. The column preceding `x` contains the parameter name, `x` contains the exact JSON X-entry name, and `y` contains the exact JSON Y-entry name.
-2. The `cal_thd` value on each applicable `swIntfc` row identifies the parameter row to use from `calParam`.
+2. The `cal_thd` value on each motion row in `swIntfc` identifies the parameter row to use from `calParam`. The three throttle parameters are identified by their `calParam` parameter names.
 3. The active motion thresholds are:
    - `SteeringWheelAngle_Th` for steering-wheel angle;
    - `AEB_SteeringAngleRate_Override` for steering-wheel-angle rate;
    - `YawrateSuspension_Th` for yaw rate; and
    - `LateralAcceleration_th` for lateral acceleration.
-4. When `SAFETY CAL` is present, the software shall resolve `PedalPosProIncrease_Th`, `PedalPosPro_Override`, and `PedalPosPro_th`. The documented JSON aliases `LSB_Throttle_Override_Increase` and `LSB_Min_Throttle_Override` shall be accepted for the first two parameters, respectively.
+4. When `SAFETY CAL` is present, the software shall load the X/Y pairs specified by the `calParam` rows for `PedalPosProIncrease_Th`, `PedalPosPro_Override`, and `PedalPosPro_th`. Each entry may come from either selected JSON file. The documented JSON aliases `LSB_Throttle_Override_Increase` and `LSB_Min_Throttle_Override` shall remain available for automatic parameter lookup when no explicit X/Y binding is supplied.
 5. Curve-based thresholds shall be linearly interpolated against vehicle speed. Values outside the curve's domain shall use the nearest endpoint.
 6. Scalar parameters, and arrays whose entries are all equal, shall be treated as constant thresholds.
 7. Explicit X/Y bindings selected in the HMI shall take precedence over the entries loaded from `calParam`.
@@ -67,8 +67,8 @@
 5. A motion reason is active when the magnitude of its signal is greater than or equal to its threshold. Every active reason shall be recorded; reasons are not mutually exclusive.
 6. The software shall not read throttle signals, resolve throttle parameters, or evaluate `throttleInc` or `maxThrottle` when `SAFETY CAL` is absent.
 7. When `SAFETY CAL` is present, the software shall treat an `aeb_deceleration_request` value of `-6` or `-15` as an AEB intervention. For each abort event, it shall use the most recent intervention start that is still active or ended no more than 0.5 seconds before the abort timestamp.
-8. The throttle-increase value shall equal the pedal position at the abort timestamp minus the pedal position at the applicable intervention start. `throttleInc` shall be active when the current pedal position is greater than or equal to `PedalPosPro_Override` and the increase is greater than or equal to `PedalPosProIncrease_Th`.
-9. `maxThrottle` shall be active when the current pedal position is greater than or equal to the speed-interpolated `PedalPosPro_th` threshold.
+8. The throttle-increase value shall equal the pedal position at the abort timestamp minus the pedal position at the applicable intervention start. `throttleInc` shall be active when the increase is greater than `PedalPosProIncrease_Th` and the magnitude of the current pedal position is greater than `PedalPosPro_Override`.
+9. `maxThrottle` shall be active when the magnitude of the current pedal position is greater than the speed-interpolated `PedalPosPro_th` threshold. The enabled throttle reason is therefore `(throttle increase > PedalPosProIncrease_Th AND absolute throttle > PedalPosPro_Override) OR absolute throttle > PedalPosPro_th`.
 10. If no motion or enabled throttle reason is active, the software shall mark the reason as `others`.
 
 ## 5. Excel output
@@ -97,7 +97,7 @@
 
 1. The software shall reject files with unsupported extensions or unreadable content.
 2. Before analysis, it shall report all missing required signals, `calParam` rows, and JSON X/Y entries in one actionable error message whenever possible. Missing throttle data shall not block analysis when `SAFETY CAL` is absent, but it shall block analysis when `SAFETY CAL` is present.
-3. Empty signals, invalid calibration curves, nonnumeric required data, and mismatched `_x`/`_y` arrays shall produce clear validation errors.
+3. Empty signals, invalid calibration curves, nonnumeric required data, and mismatched `_x`/`_y` arrays shall produce clear validation errors. One-dimensional JSON arrays may be encoded directly, as one nested row, or as one nested column.
 4. A failed analysis shall not create or overwrite a misleading output report.
 
 ## 7. Windows 11 deployment

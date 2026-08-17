@@ -7,7 +7,7 @@ import numpy as np
 
 from .calibration import CalibrationRepository
 from .errors import InputValidationError
-from .mapping import MOTION_LOGICAL_NAMES
+from .mapping import MOTION_LOGICAL_NAMES, THROTTLE_PARAMETER_BY_ROLE
 from .models import (
     AbortEvent,
     AnalysisResult,
@@ -34,11 +34,7 @@ ANALYSIS_LOGICAL_NAMES = (
     "abort_any_active_event",
 )
 THROTTLE_LOGICAL_NAMES = ("throttle", "aeb_deceleration_request")
-THROTTLE_PARAMETER_DEFAULTS = {
-    "throttle_increase": "PedalPosProIncrease_Th",
-    "throttle_override": "PedalPosPro_Override",
-    "throttle_max": "PedalPosPro_th",
-}
+THROTTLE_PARAMETER_DEFAULTS = THROTTLE_PARAMETER_BY_ROLE
 THROTTLE_DISABLED_WARNING = (
     "Throttle checks are disabled because no SAFETY CAL JSON file was selected."
 )
@@ -144,27 +140,7 @@ class AbortAnalyzer:
             configured = mapping.signal(logical_name).calibrations
             names[logical_name] = configured[0] if configured else default_name
         if enable_throttle_checks:
-            configured = mapping.signal("throttle").calibrations
-            by_role: dict[str, str] = {}
-            for name in configured:
-                token = "".join(character.lower() for character in name if character.isalnum())
-                if "increase" in token:
-                    by_role["throttle_increase"] = name
-                elif "override" in token:
-                    by_role["throttle_override"] = name
-                elif token == "pedalposproth":
-                    by_role["throttle_max"] = name
-            missing = [
-                default_name
-                for role, default_name in THROTTLE_PARAMETER_DEFAULTS.items()
-                if role not in by_role
-            ]
-            if missing:
-                raise InputValidationError(
-                    "Throttle checks require the throttle row in swIntfc cal_thd to list:\n- "
-                    + "\n- ".join(missing)
-                )
-            names.update(by_role)
+            names.update(THROTTLE_PARAMETER_DEFAULTS)
         return names
 
     def _analyse_event(
@@ -201,6 +177,7 @@ class AbortAnalyzer:
         deceleration_start = None
         if enable_throttle_checks:
             throttle = values["throttle"]
+            absolute_throttle = abs(throttle)
             thresholds.update(
                 {
                     role: parameters[role].value_at(speed)
@@ -215,10 +192,10 @@ class AbortAnalyzer:
                 throttle_baseline = signals["throttle"].value_at(deceleration_start)
                 throttle_increase = throttle - throttle_baseline
                 flags["throttleInc"] = (
-                    throttle >= thresholds["throttle_override"]
-                    and throttle_increase >= thresholds["throttle_increase"]
+                    throttle_increase > thresholds["throttle_increase"]
+                    and absolute_throttle > thresholds["throttle_override"]
                 )
-            flags["maxThrottle"] = throttle >= thresholds["throttle_max"]
+            flags["maxThrottle"] = absolute_throttle > thresholds["throttle_max"]
 
         flags["others"] = not any(value for name, value in flags.items() if name != "others")
 

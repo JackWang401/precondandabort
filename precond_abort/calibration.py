@@ -35,6 +35,19 @@ def _numeric_values(value: Any) -> tuple[float, ...] | None:
         return (float(value),)
     if isinstance(value, list) and value and all(_is_number(item) for item in value):
         return tuple(float(item) for item in value)
+    # Some calibration exports encode one-dimensional data as a single nested
+    # row ([[x1, x2, ...]]) or a single nested column ([[x1], [x2], ...]).
+    if isinstance(value, list) and len(value) == 1 and isinstance(value[0], list):
+        return _numeric_values(value[0])
+    if (
+        isinstance(value, list)
+        and value
+        and all(
+            isinstance(item, list) and len(item) == 1 and _is_number(item[0])
+            for item in value
+        )
+    ):
+        return tuple(float(item[0]) for item in value)
     return None
 
 

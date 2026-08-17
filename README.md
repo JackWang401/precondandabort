@@ -67,13 +67,13 @@ On Windows, use `run_windows.bat` or run `.\.venv\Scripts\python.exe run_app.py`
 
 When the HMI starts, all motion and throttle calibratables are visible as placeholder rows. If no previous selection is available, a file-navigation dialog prompts you to locate the required **VCS CAL** JSON file. **SAFETY CAL** is optional and has its own **Browse** control. The application does not assume that either file is in the repository or another fixed location.
 
-The application discovers numeric entries in VCS CAL. When SAFETY CAL is selected, it combines entries from both files, labels each source with its originating filename, and enables throttle checks. It reads each motion parameter and its X/Y entry names from the configuration workbook's `calParam` tab. Throttle parameters are resolved from the names listed in the throttle row of `swIntfc`. Select any calibratable row to preview its curve or constant value. You can choose different entries and select **Use selected X/Y** to override the automatic binding. Use `constant — no X axis` when the selected Y entry is scalar or all of its values are equal.
+The application discovers numeric entries in VCS CAL. When SAFETY CAL is selected, it combines entries from both files, labels each source with its originating filename, and enables throttle checks. It reads the parameter name and exact X/Y entry names for all active motion and throttle calibratables from the configuration workbook's `calParam` tab. Each X or Y entry can come from either JSON file. Select any calibratable row to preview its curve or constant value. You can choose different entries and select **Use selected X/Y** to override the automatic binding. Use `constant — no X axis` when the selected Y entry is scalar or all of its values are equal. Direct arrays, one-row nested arrays, and one-column nested arrays are supported.
 
 The **Measurement MDF/MF4 files** selector accepts one or more files in a single selection. Every selected file is analyzed with the same mapping and calibration bindings, and all events are written to one Excel report. The HMI preview and report retain the originating filename for each event. The report path is generated automatically in the measurement folder: `<measurement>_abort_analysis.xlsx` for one file or `combined_<count>_files_abort_analysis.xlsx` for a batch. Batch inputs must be in the same folder.
 
 The HMI remembers the required and optional JSON files, every selected MDF/MF4 file, and the configuration workbook between launches. The output-report path is recalculated from the restored measurement location. On Windows, these selections are stored in `%LOCALAPPDATA%\PrecondAbortAnalyzer\state.json`. In a source checkout on other platforms, they remain in the ignored `.precond_abort_state.json` file beside `run_app.py`. Restored paths are considered before repository sample paths.
 
-Pair validation rejects mismatched point counts and duplicate X values before the analysis starts. With only VCS CAL selected, throttle signals and parameters are not required. Selecting SAFETY CAL makes the throttle and AEB-deceleration-request signals, along with all three throttle parameters, mandatory for that run.
+Pair validation rejects mismatched point counts and duplicate X values before the analysis starts. With only VCS CAL selected, throttle signals and parameters are not required. Selecting SAFETY CAL makes the throttle and AEB-deceleration-request signals, along with the `PedalPosProIncrease_Th`, `PedalPosPro_Override`, and `PedalPosPro_th` rows in `calParam`, mandatory for that run.
 
 ## Run from the command line
 
@@ -81,6 +81,7 @@ Pair validation rejects mismatched point counts and duplicate X values before th
 source .venv/bin/activate
 python -m precond_abort.cli analyze \
   --json AADT-202904_1_000_DADC_COLLECTIONS_CCPLEX_ORIN_CCPLEX_JLR_CAL.json \
+  --safety-json CCPLEX_ORIN_CCPLEX_JLR_SAFETY_CAL.json \
   --mdf MODEL_LOGGER_AADT-146546_1_000_DADC_COLLECTIONS_model_logger_modelLogger_session_19_0.mf4 \
   --mapping PrecondAndAbort.numbers \
   --output outputs/abort_analysis.xlsx
@@ -118,6 +119,9 @@ The active `calParam` rows are:
 | SteeringWheelAngle_Th | SteeringWheelAngle_Th_x | SteeringWheelAngle_Th_y |
 | LateralAcceleration_th | LateralAcceleration_th_x | LateralAcceleration_th_y |
 | YawrateSuspension_Th | YawrateSuspension_Th_x | YawrateSuspension_Th_y |
+| PedalPosProIncrease_Th | PedalPosProIncrease_Th_x | PedalPosProIncrease_Th_y |
+| PedalPosPro_Override | PedalPosPro_Override_x | PedalPosPro_Override_y |
+| PedalPosPro_th | PedalPosPro_th_x | PedalPosPro_th_y |
 
 Create a clean template with:
 
@@ -133,9 +137,10 @@ The supplied `PrecondAndAbort.xlsx` file is the default on Windows 11. `PrecondA
 - Signal values use the latest available sample at or before the event timestamp.
 - Signed motion signals are compared by magnitude against positive, speed-interpolated thresholds.
 - Without SAFETY CAL, throttle signals and thresholds are not loaded; `throttleInc` and `maxThrottle` remain `No`.
-- With SAFETY CAL, throttle checks use `PedalPosProIncrease_Th`, `PedalPosPro_Override`, and `PedalPosPro_th`. The documented `LSB_Throttle_Override_Increase` and `LSB_Min_Throttle_Override` JSON aliases are accepted.
+- With SAFETY CAL, throttle checks use the X/Y pairs specified by the `calParam` rows for `PedalPosProIncrease_Th`, `PedalPosPro_Override`, and `PedalPosPro_th`. The documented `LSB_Throttle_Override_Increase` and `LSB_Min_Throttle_Override` aliases remain available for automatic lookup.
 - An AEB deceleration request of `-6` or `-15` starts the throttle-increase baseline. The baseline remains applicable while the request is active and for 0.5 seconds after it ends.
-- `throttleInc` is `Yes` when the current pedal position reaches the override threshold and its increase from the baseline reaches the increase threshold. `maxThrottle` is `Yes` when the pedal position reaches the speed-dependent maximum threshold.
+- `throttleInc` is `Yes` when the increase from the baseline is strictly above `PedalPosProIncrease_Th` and the absolute pedal position is strictly above `PedalPosPro_Override`.
+- `maxThrottle` is `Yes` when the absolute pedal position is strictly above the speed-dependent `PedalPosPro_th` threshold. Consequently, a throttle reason is active when the `throttleInc` condition or the `maxThrottle` condition is true.
 - `others` is set when none of the applicable motion or throttle reasons is active.
 
 ## Excel output layout

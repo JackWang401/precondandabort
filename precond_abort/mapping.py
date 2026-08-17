@@ -42,6 +42,11 @@ MOTION_LOGICAL_NAMES = (
     "yaw_rate",
     "lateral_acceleration",
 )
+THROTTLE_PARAMETER_BY_ROLE = {
+    "throttle_increase": "PedalPosProIncrease_Th",
+    "throttle_override": "PedalPosPro_Override",
+    "throttle_max": "PedalPosPro_th",
+}
 REQUIRED_SIGNALS = (
     "vehicle_speed",
     *MOTION_LOGICAL_NAMES,
@@ -222,6 +227,30 @@ def match_motion_calibration_specs(
     if missing:
         raise MappingError(
             "The 'calParam' worksheet does not define the required motion parameters:\n- "
+            + "\n- ".join(missing)
+        )
+    return matched
+
+
+def match_calibration_specs(
+    mapping: MappingConfiguration,
+    specs: tuple[CalibrationBindingSpec, ...],
+    require_throttle: bool = False,
+) -> dict[str, CalibrationBindingSpec]:
+    """Match motion and available throttle roles to their calParam rows."""
+
+    matched = match_motion_calibration_specs(mapping, specs)
+    by_parameter = {_token(spec.parameter_name): spec for spec in specs}
+    missing: list[str] = []
+    for role, parameter_name in THROTTLE_PARAMETER_BY_ROLE.items():
+        spec = by_parameter.get(_token(parameter_name))
+        if spec is not None:
+            matched[role] = spec
+        elif require_throttle:
+            missing.append(parameter_name)
+    if missing:
+        raise MappingError(
+            "The 'calParam' worksheet does not define the required throttle parameters:\n- "
             + "\n- ".join(missing)
         )
     return matched

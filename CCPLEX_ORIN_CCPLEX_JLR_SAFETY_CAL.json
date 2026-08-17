@@ -1,0 +1,62 @@
+{
+  "configuration": {
+    "AAD": {
+      "Diag": {
+        "CameraEOL2248": {
+          "PedalPosPro_Override_x": {
+            "unit": "kph",
+            "value": [
+              [
+                0.0,
+                10.0,
+                20.0,
+                65.0,
+                100.0
+              ]
+            ],
+            "version": 1
+          },
+          "PedalPosPro_Override_y": {
+            "unit": "%",
+            "value": [
+              [
+                60,
+                65,
+                70,
+                70,
+                70
+              ]
+            ],
+            "version": 1
+          },
+          "PedalPosProIncrease_Th_x": {
+            "unit": "kph",
+            "value": [
+              [
+                0.0,
+                10.0,
+                20.0,
+                65.0,
+                100.0
+              ]
+            ],
+            "version": 1
+          },
+          "PedalPosProIncrease_Th_y": {
+            "unit": "%",
+            "value": [
+              [
+                55,
+                60,
+                65,
+                65,
+                65
+              ]
+            ],
+            "version": 1
+          }
+        }
+      }
+    }
+  }
+}

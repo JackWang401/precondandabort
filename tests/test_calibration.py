@@ -37,6 +37,33 @@ class CalibrationRepositoryTests(unittest.TestCase):
         self.assertFalse(parameter.is_curve)
         self.assertEqual(parameter.value_at(123), 20)
 
+    def test_single_row_nested_arrays_are_supported(self):
+        repository = CalibrationRepository.from_document(
+            {
+                "cal": {
+                    "PedalPosPro_Override_x": {"value": [[0, 10, 20]]},
+                    "PedalPosPro_Override_y": {"value": [[60, 65, 70]]},
+                }
+            }
+        )
+        parameter = repository.resolve("PedalPosPro_Override")
+        self.assertEqual(parameter.x_values, (0.0, 10.0, 20.0))
+        self.assertEqual(parameter.y_values, (60.0, 65.0, 70.0))
+        self.assertEqual(parameter.value_at(15), 67.5)
+
+    def test_single_column_nested_arrays_are_supported(self):
+        repository = CalibrationRepository.from_document(
+            {
+                "cal": {
+                    "Curve_x": {"value": [[0], [10], [20]]},
+                    "Curve_y": {"value": [[100], [50], [25]]},
+                }
+            }
+        )
+        parameter = repository.resolve("Curve")
+        self.assertEqual(parameter.x_values, (0.0, 10.0, 20.0))
+        self.assertEqual(parameter.y_values, (100.0, 50.0, 25.0))
+
     def test_requirement_alias_resolves_supplied_name(self):
         parameter = self.repository.resolve("PedalPosProIncrease_Th")
         self.assertEqual(parameter.name, "LSB_Throttle_Override_Increase")

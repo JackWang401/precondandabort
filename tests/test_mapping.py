@@ -10,6 +10,7 @@ from precond_abort.mapping import (
     MOTION_LOGICAL_NAMES,
     load_calibration_specs,
     load_mapping,
+    match_calibration_specs,
     match_motion_calibration_specs,
 )
 
@@ -75,6 +76,17 @@ class MappingTests(unittest.TestCase):
             "SteeringWheelAngle_Th_x",
         )
 
+    def test_throttle_calparam_rows_are_required_when_safety_cal_is_used(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = self._workbook(Path(directory))
+            mapping = load_mapping(path)
+            specs = load_calibration_specs(path)
+            with self.assertRaisesRegex(
+                MappingError,
+                "required throttle parameters",
+            ):
+                match_calibration_specs(mapping, specs, require_throttle=True)
+
     def test_throttle_mapping_is_optional_while_checks_are_disabled(self):
         with tempfile.TemporaryDirectory() as directory:
             config = load_mapping(self._workbook(Path(directory), omit="throttle"))
@@ -91,6 +103,16 @@ class MappingTests(unittest.TestCase):
         )
         self.assertEqual(set(matched), set(MOTION_LOGICAL_NAMES))
         self.assertIn("throttle", mapping.signals)
+
+        all_matched = match_calibration_specs(
+            mapping,
+            load_calibration_specs(workbook),
+            require_throttle=True,
+        )
+        self.assertEqual(
+            set(all_matched) - set(MOTION_LOGICAL_NAMES),
+            {"throttle_increase", "throttle_override", "throttle_max"},
+        )
 
 
 if __name__ == "__main__":
